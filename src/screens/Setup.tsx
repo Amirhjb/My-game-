@@ -151,7 +151,13 @@ export function GenrePick({ api }: { api: GameApi }) {
               className="pick"
               aria-pressed={state.genre === g.id}
               onClick={() => dispatch({ type: 'setGenre', genre: g.id as GenreId })}
-              style={state.genre === g.id ? undefined : { ['--h' as string]: String(g.hue), ['--c' as string]: String(g.chroma) }}
+              // Cada tarjeta enseña su propio acento. `--accent` se resuelve donde se
+              // declara, así que hay que redeclararlo aquí y no solo cambiar `--h`.
+              style={{
+                ['--accent' as string]: `oklch(78% ${g.chroma} ${g.hue})`,
+                ['--accent-soft' as string]: `oklch(78% ${g.chroma} ${g.hue} / 0.16)`,
+                ['--accent-line' as string]: `oklch(78% ${g.chroma} ${g.hue} / 0.4)`,
+              }}
             >
               <span className="pick__title">
                 <span aria-hidden style={{ fontSize: 20 }}>{g.emoji}</span>
@@ -289,19 +295,19 @@ export function TraitsPick({ api }: { api: GameApi }) {
           Para llevarte una ventaja tienes que aceptar un defecto que la pague. Máximo {MAX_TRAITS} rasgos.
         </p>
 
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16, marginBottom: 22 }}>
-          <div style={{ textAlign: 'center' }}>
-            <div className="u-eyebrow">Puntos</div>
-            <div className="u-num" style={{ fontSize: 30, color: valid ? 'var(--ok)' : 'var(--bad)', lineHeight: 1.2 }}>
-              {balance}
-            </div>
-          </div>
-          <div style={{ fontSize: 12.5, color: 'var(--text-dim)', maxWidth: 260, lineHeight: 1.5 }}>
+        <div className="points">
+          <span className="points__num" style={{ color: valid ? 'var(--ok)' : 'var(--bad)' }}>
+            {balance > 0 ? `+${balance}` : balance}
+          </span>
+          <span className="points__body">
             {valid
-              ? state.traits.length ? 'Ficha válida. Puedes seguir o añadir más rasgos.' : 'Puedes empezar sin rasgos si lo prefieres.'
+              ? state.traits.length
+                ? 'Ficha válida. Puedes seguir así o gastar los puntos que te sobren.'
+                : 'Puedes empezar sin ningún rasgo si lo prefieres.'
               : 'Te faltan puntos: añade algún lastre o quita una ventaja.'}
-            <div style={{ color: 'var(--text-faint)', marginTop: 4 }}>{state.traits.length}/{MAX_TRAITS} seleccionados</div>
-          </div>
+            <br />
+            <span style={{ color: 'var(--text-faint)' }}>{state.traits.length} de {MAX_TRAITS} rasgos elegidos</span>
+          </span>
         </div>
 
         <div className="grid grid--2" style={{ alignItems: 'start' }}>

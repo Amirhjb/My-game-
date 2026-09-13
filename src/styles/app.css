@@ -82,9 +82,24 @@
 
 .setup__actions {
   display: flex; gap: 10px; margin-top: 26px;
-  position: sticky; bottom: 16px; z-index: 5;
+  position: sticky; bottom: 0; z-index: 5;
+  padding: 14px 0 max(14px, env(safe-area-inset-bottom));
+  background: linear-gradient(transparent, var(--bg) 35%);
 }
 .setup__actions .btn { flex: 1; }
+
+/* Resumen de puntos de la pantalla de rasgos */
+.points {
+  display: flex; align-items: center; gap: 16px;
+  padding: 14px 18px; margin: 0 auto 24px; max-width: 460px;
+  border-radius: var(--r-md); border: 1px solid var(--line);
+  background: var(--surface-1);
+}
+.points__num {
+  font-family: var(--font-mono); font-size: 30px; line-height: 1;
+  min-width: 52px; text-align: center;
+}
+.points__body { font-size: 12.5px; color: var(--text-dim); line-height: 1.5; }
 
 /* ============================================================
    Pantalla de juego
