@@ -1,0 +1,84 @@
+/* ============================================================
+   Sistema de diseño — tokens
+   Base neutra casi negra + un acento por género (variable --h).
+   Todos los colores derivan de OKLCH para que las tintas sean
+   consistentes en cualquier tono.
+   ============================================================ */
+:root {
+  /* Tono del acento: lo sobreescribe el género activo (ver theme.ts) */
+  --h: 42;
+  --c: 0.13;
+
+  /* --- Superficies (escala de elevación) --- */
+  --bg:        oklch(14% 0.008 var(--h));
+  --bg-deep:   oklch(10% 0.008 var(--h));
+  --surface-1: oklch(17.5% 0.009 var(--h));
+  --surface-2: oklch(21% 0.010 var(--h));
+  --surface-3: oklch(25% 0.012 var(--h));
+  --overlay:   oklch(8% 0.01 var(--h) / 0.72);
+
+  /* --- Líneas --- */
+  --line:        oklch(100% 0 0 / 0.07);
+  --line-strong: oklch(100% 0 0 / 0.14);
+
+  /* --- Texto --- */
+  --text:     oklch(93% 0.008 var(--h));
+  --text-mid: oklch(72% 0.010 var(--h));
+  --text-dim: oklch(56% 0.010 var(--h));
+  --text-faint: oklch(42% 0.010 var(--h));
+
+  /* --- Acento --- */
+  --accent:      oklch(78% var(--c) var(--h));
+  --accent-soft: oklch(78% var(--c) var(--h) / 0.16);
+  --accent-line: oklch(78% var(--c) var(--h) / 0.38);
+  --accent-ink:  oklch(18% 0.06 var(--h));
+
+  /* --- Semánticos --- */
+  --ok:    oklch(76% 0.15 150);
+  --warn:  oklch(80% 0.15 78);
+  --bad:   oklch(66% 0.19 25);
+  --info:  oklch(76% 0.12 240);
+  --ok-soft:   oklch(76% 0.15 150 / 0.15);
+  --warn-soft: oklch(80% 0.15 78 / 0.15);
+  --bad-soft:  oklch(66% 0.19 25 / 0.15);
+  --info-soft: oklch(76% 0.12 240 / 0.15);
+
+  /* --- Tipografía --- */
+  --font-ui:    'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-prose: 'Newsreader', ui-serif, Georgia, 'Times New Roman', serif;
+  --font-mono:  'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* --- Radios --- */
+  --r-xs: 5px;
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 18px;
+  --r-full: 999px;
+
+  /* --- Sombras --- */
+  --sh-sm: 0 1px 2px oklch(0% 0 0 / 0.4);
+  --sh-md: 0 4px 16px -4px oklch(0% 0 0 / 0.55);
+  --sh-lg: 0 24px 60px -12px oklch(0% 0 0 / 0.75);
+  --sh-glow: 0 0 0 1px var(--accent-line), 0 0 24px -6px oklch(78% var(--c) var(--h) / 0.45);
+
+  /* --- Movimiento --- */
+  --ease: cubic-bezier(0.25, 0.6, 0.3, 1);
+  --dur-1: 120ms;
+  --dur-2: 220ms;
+  --dur-3: 420ms;
+
+  /* --- Espaciado del shell --- */
+  --rail-l: 296px;
+  --rail-r: 330px;
+  --topbar-h: 54px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-1: 0ms; --dur-2: 0ms; --dur-3: 0ms; }
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
