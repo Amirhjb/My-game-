@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
-import { getItem, itemCategory } from '../data/items';
+import { MATERIAL_CLASSES, getItem, itemCategory } from '../data/items';
 import { skinItem } from '../data/genres';
 import { capacityView } from '../engine/reducer';
 import { Meter, Modal } from '../components/ui';
+import { formatWeight } from '../components/ContextRail';
 import type { GameApi } from '../hooks/useGame';
 
 export function Inventory({ api, onClose }: { api: GameApi; onClose: () => void }) {
@@ -10,19 +11,20 @@ export function Inventory({ api, onClose }: { api: GameApi; onClose: () => void 
   const [selected, setSelected] = useState<string | null>(null);
   const cap = capacityView(state);
 
+  const catalog = state.customItems;
   const groups = useMemo(() => {
     const map = new Map<string, { icon: string; order: number; items: typeof state.inventory }>();
     for (const s of state.inventory) {
-      const cat = itemCategory(s.name);
+      const cat = itemCategory(s.name, catalog);
       if (!map.has(cat.label)) map.set(cat.label, { icon: cat.icon, order: cat.order, items: [] });
       map.get(cat.label)!.items.push(s);
     }
     return [...map.entries()]
       .sort((a, b) => a[1].order - b[1].order)
       .map(([label, g]) => ({ label, ...g, items: [...g.items].sort((a, b) => a.name.localeCompare(b.name)) }));
-  }, [state.inventory]);
+  }, [state.inventory, catalog]);
 
-  const def = selected ? getItem(selected) : null;
+  const def = selected ? getItem(selected, catalog) : null;
   const atBase = state.base.established && state.map.currentZone === state.base.location;
 
   return (
@@ -57,7 +59,7 @@ export function Inventory({ api, onClose }: { api: GameApi; onClose: () => void 
             <div key={g.label} className="inv__group">
               <div className="u-eyebrow" style={{ marginBottom: 5 }}>{g.icon} {g.label}</div>
               {g.items.map((s) => {
-                const item = getItem(s.name);
+                const item = getItem(s.name, catalog);
                 return (
                   <button
                     key={s.name}
@@ -69,7 +71,7 @@ export function Inventory({ api, onClose }: { api: GameApi; onClose: () => void 
                     <span className="inv__name">{skinItem(s.name, state.genre)}</span>
                     {item.use && <span className="chip chip--accent" style={{ fontSize: 9.5, padding: '1px 6px' }}>Usable</span>}
                     {s.qty > 1 && <span className="inv__qty">×{s.qty}</span>}
-                    <span className="inv__weight">{(item.kg * s.qty).toFixed(1)} kg</span>
+                    <span className="inv__weight">{formatWeight(item.kg * s.qty)}</span>
                   </button>
                 );
               })}
@@ -79,12 +81,34 @@ export function Inventory({ api, onClose }: { api: GameApi; onClose: () => void 
 
         {def && selected && (
           <aside className="card" style={{ padding: 14, position: 'sticky', top: 0 }}>
-            <h3 style={{ fontSize: 14, marginBottom: 8 }}>{skinItem(selected, state.genre)}</h3>
+            <h3 style={{ fontSize: 14, marginBottom: def.desc ? 5 : 8 }}>{skinItem(selected, state.genre)}</h3>
+            {def.desc && (
+              <p style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5, marginBottom: 9, fontStyle: 'italic' }}>
+                {def.desc}
+              </p>
+            )}
             <dl style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 10px', fontSize: 12, color: 'var(--text-dim)', marginBottom: 12 }}>
-              <dt>Peso</dt><dd className="u-num">{def.kg} kg</dd>
+              <dt>Peso</dt><dd className="u-num">{formatWeight(def.kg)}</dd>
               <dt>Volumen</dt><dd className="u-num">{def.l} L</dd>
               <dt>Cantidad</dt><dd className="u-num">×{state.inventory.find((s) => s.name === selected)?.qty ?? 0}</dd>
             </dl>
+            {def.materials && Object.keys(def.materials).length > 0 && (
+              <div style={{ marginBottom: 11 }}>
+                <div className="u-eyebrow" style={{ marginBottom: 5 }}>Sirve como</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                  {Object.entries(def.materials).map(([m, penalty]) => (
+                    <span
+                      key={m}
+                      className={`chip ${penalty === 0 ? 'chip--pos' : ''}`}
+                      title={penalty === 0 ? 'Material ideal' : `Improvisado: +${Math.round(penalty * 100)} % de fallo`}
+                    >
+                      {MATERIAL_CLASSES[m]?.label ?? m}
+                      {penalty > 0 && <span style={{ color: 'var(--warn)' }}> ~</span>}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
             {def.isContainer && (
               <p style={{ fontSize: 12, color: 'var(--ok)', marginBottom: 10 }}>
                 Contenedor: +{def.extraKg} kg y +{def.extraL} L de capacidad.

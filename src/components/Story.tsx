@@ -52,7 +52,7 @@ export function Story({ api }: { api: GameApi }) {
     if (status === 'idle') inputRef.current?.focus();
   }, [status]);
 
-  const busy = status === 'thinking';
+  const busy = status === 'thinking' || status === 'improvising';
   const group = suggestActions(state, api.suggestions);
 
   const submit = () => {
@@ -84,7 +84,7 @@ export function Story({ api }: { api: GameApi }) {
           {busy && (
             <div className="thinking">
               <span className="thinking__dots" aria-hidden><i /><i /><i /></span>
-              <span>El narrador está escribiendo…</span>
+              <span>{status === 'improvising' ? 'Calculando si eso se puede apañar…' : 'El narrador está escribiendo…'}</span>
               <button className="btn btn--sm btn--ghost" onClick={cancel}>Cancelar</button>
             </div>
           )}

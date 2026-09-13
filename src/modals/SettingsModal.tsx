@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { NARRATOR_LIST } from '../data/conditions';
 import { testConnection } from '../ai/client';
-import { PROVIDERS, providerOf } from '../persistence/settings';
+import { HAS_BUILT_IN_KEY, PROVIDERS, providerOf } from '../persistence/settings';
 import { Modal } from '../components/ui';
 import type { GameApi } from '../hooks/useGame';
 
@@ -91,13 +91,17 @@ export function SettingsModal({ api, onClose }: { api: GameApi; onClose: () => v
                 {showKey ? '🙈' : '👁'}
               </button>
             </div>
-            {preset.keyUrl && (
-              <p style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 7, lineHeight: 1.5 }}>
-                Consigue una clave gratis en{' '}
-                <a href={preset.keyUrl} target="_blank" rel="noreferrer noopener">{new URL(preset.keyUrl).hostname}</a>.
-                Se guarda solo en este navegador; nunca se envía a ningún sitio que no sea el proveedor que elijas.
-              </p>
-            )}
+            <p style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 7, lineHeight: 1.55 }}>
+              {HAS_BUILT_IN_KEY
+                ? 'Esta compilación ya lleva una clave integrada desde .env.local. Lo que escribas aquí la sustituye solo en este navegador.'
+                : 'Para que la clave venga puesta de fábrica, ponla en .env.local y vuelve a ejecutar npm run dist.'}
+              {preset.keyUrl && (
+                <>
+                  {' '}Consigue una gratis en{' '}
+                  <a href={preset.keyUrl} target="_blank" rel="noreferrer noopener">{new URL(preset.keyUrl).hostname}</a>.
+                </>
+              )}
+            </p>
           </div>
         )}
 

@@ -6,13 +6,20 @@ import { currentNode, ZONE_TYPES } from '../engine/world';
 import { Block } from './ui';
 import type { GameApi } from '../hooks/useGame';
 
+/** Pesos pequeños en gramos: «0.0 kg» no le dice nada a nadie. */
+export function formatWeight(kg: number): string {
+  if (kg > 0 && kg < 0.1) return `${Math.round(kg * 1000)} g`;
+  return `${kg.toFixed(kg < 1 ? 2 : 1)} kg`;
+}
+
 export function ContextRail({ api, onOpen }: { api: GameApi; onOpen: (id: string) => void }) {
   const { state, sceneUrl, status, settings, takePhoto } = api;
   const node = currentNode(state.map);
   const weather = WEATHER[state.weather.id];
 
+  const cat = state.customItems;
   const grouped = [...state.inventory]
-    .sort((a, b) => itemCategory(a.name).order - itemCategory(b.name).order || a.name.localeCompare(b.name))
+    .sort((a, b) => itemCategory(a.name, cat).order - itemCategory(b.name, cat).order || a.name.localeCompare(b.name))
     .slice(0, 9);
 
   return (
@@ -97,13 +104,13 @@ export function ContextRail({ api, onOpen }: { api: GameApi; onOpen: (id: string
       >
         <div className="inv">
           {grouped.map((s) => {
-            const def = getItem(s.name);
+            const def = getItem(s.name, cat);
             return (
               <div key={s.name} className="inv__row" style={{ cursor: 'default' }}>
-                <span aria-hidden style={{ fontSize: 13 }}>{itemCategory(s.name).icon}</span>
+                <span aria-hidden style={{ fontSize: 13 }}>{itemCategory(s.name, cat).icon}</span>
                 <span className="inv__name" title={skinItem(s.name, state.genre)}>{skinItem(s.name, state.genre)}</span>
                 {s.qty > 1 && <span className="inv__qty">×{s.qty}</span>}
-                <span className="inv__weight">{(def.kg * s.qty).toFixed(1)} kg</span>
+                <span className="inv__weight">{formatWeight(def.kg * s.qty)}</span>
               </div>
             );
           })}

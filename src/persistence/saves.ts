@@ -39,6 +39,7 @@ function migrate(raw: unknown): GameState | null {
     ...(s as GameState),
     version: SAVE_VERSION,
     modifiers: s.modifiers ?? [],
+    customItems: s.customItems ?? {},
     counters: s.counters ?? {},
     stats: { ...initialState.stats, ...(s.stats ?? {}) },
     needs: { ...initialState.needs, ...(s.needs ?? {}) },

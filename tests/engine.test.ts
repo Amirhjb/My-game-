@@ -1,7 +1,8 @@
 /* Pruebas del motor: se ejecutan con `npm test`. Sin dependencias externas. */
 import { reducer } from '../src/engine/reducer';
 import { initialState } from '../src/engine/state';
-import { parseTurn, matchItemName, extractJson } from '../src/ai/schema';
+import { parseTurn, parseImprovise, matchItemName, extractJson, asNewItems } from '../src/ai/schema';
+import { estimateItem, getItem, itemsForMaterial } from '../src/data/items';
 import { planCraft, resolveCraft } from '../src/engine/crafting';
 import { tickNeeds, capacityOf, addItems, removeItems } from '../src/engine/rules';
 import { advanceWeather, applyMapUpdate, rollWeather } from '../src/engine/world';
@@ -26,8 +27,10 @@ const turn = (over: Partial<TurnResult> = {}): TurnResult => ({
   sceneDescription: '', location: 'Inicio',
   injuriesUpdate: [], diseasesUpdate: [],
   mapUpdate: { currentZone: 'Inicio', type: 'urban', danger: 2, connections: [] },
-  suggestions: [], ...over,
+  suggestions: [], newItems: [], recipesLearned: [], ...over,
 });
+
+const countOfName = (s: GameState, name: string) => s.inventory.find((i) => i.name === name)?.qty ?? 0;
 
 function newRun(): GameState {
   let s = initialState;
@@ -178,9 +181,12 @@ function newRun(): GameState {
   check('sin materiales no se fabrica', broke.inventory.length === newRun().inventory.length);
   check('sin materiales se avisa', broke.log.some((l) => /Faltan materiales/i.test(l.text)));
 
-  // Fallo: devuelve la mitad del material.
-  const failed = resolveCraft(planCraft('Trampa de caza', [{ name: 'Cuerda (5m)', qty: 1 }, { name: 'Herramientas básicas', qty: 1 }], () => 5, false)!, () => 0);
+  // Fallo: hace falta un plan con riesgo real, así que usamos materiales improvisados.
+  const riesgo = planCraft('Lanza de madera', [{ name: 'Bate de béisbol', qty: 1 }, { name: 'Machete', qty: 1 }], () => 5, false)!;
+  check('el plan improvisado tiene riesgo', riesgo.failChance > 0);
+  const failed = resolveCraft(riesgo, () => 0);
   check('un fallo de fabricación no produce el objeto', !failed.ok);
+  check('un fallo devuelve parte del material', failed.produced.every((p) => p.name !== 'Lanza improvisada'));
 }
 
 // ── Refugio ──────────────────────────────────────────────────────────────────
@@ -317,6 +323,176 @@ function newRun(): GameState {
   for (let i = 0; i < 300; i++) s = reducer(s, { type: 'log', kind: 'system', text: `linea ${i}` });
   check('el registro se recorta', s.log.length <= 220, `${s.log.length}`);
   check('se conservan las últimas líneas', s.log[s.log.length - 1].text === 'linea 299');
+}
+
+// ── Catálogo dinámico: el mundo puede inventar objetos ──────────────────────
+{
+  let s = newRun();
+  s = reducer(s, {
+    type: 'applyTurn', rng: seeded(21), playerText: 'Rebusco en el cenicero',
+    result: turn({
+      newItems: [
+        { name: 'Colilla a medio fumar', kg: 0.01, l: 0.01, tags: ['junk'], materials: { combustible: 0.4 } },
+        { name: 'Chapa de botella', kg: 0.005, l: 0.005, tags: ['junk'] },
+      ],
+      itemsGained: [{ name: 'Colilla a medio fumar', qty: 4 }, { name: 'Chapa de botella', qty: 1 }],
+    }),
+  });
+  check('el objeto nuevo entra en el catálogo de la partida', !!s.customItems['Colilla a medio fumar']);
+  check('el objeto nuevo llega al inventario', countOfName(s, 'Colilla a medio fumar') === 4);
+  check('el peso del objeto nuevo se respeta', getItem('Colilla a medio fumar', s.customItems).kg === 0.01);
+  check('el objeto nuevo cuenta para la carga',
+    capacityOf(s.inventory, 1, false, s.customItems).usedKg > capacityOf(s.inventory.filter((i) => i.name !== 'Colilla a medio fumar'), 1, false, s.customItems).usedKg);
+  check('el objeto nuevo aporta su clase de material',
+    itemsForMaterial(s.inventory, 'combustible', s.customItems).some((m) => m.name === 'Colilla a medio fumar'));
+
+  // Persiste entre turnos
+  s = reducer(s, { type: 'applyTurn', rng: seeded(22), playerText: null, result: turn({ itemsGained: [{ name: 'Colilla a medio fumar', qty: 1 }] }) });
+  check('el objeto nuevo sigue existiendo el turno siguiente', countOfName(s, 'Colilla a medio fumar') === 5);
+}
+
+// ── Validación de objetos nuevos ────────────────────────────────────────────
+{
+  const ok = asNewItems([{ name: 'gafas rotas', kg: 0.05, l: 0.08, tags: ['junk', 'inventada'], materials: { filo: 0.5, telepatia: 0.1 } }], []);
+  check('el nombre del objeto nuevo se normaliza', ok[0].name === 'Gafas rotas');
+  check('se filtran las etiquetas inventadas', ok[0].tags.length === 1 && ok[0].tags[0] === 'junk');
+  check('se filtran las clases de material inventadas', Object.keys(ok[0].materials ?? {}).length === 1);
+
+  const absurd = asNewItems([{ name: 'Colilla', kg: 9999, l: -3 }], []);
+  check('se acota un peso absurdo', absurd[0].kg === 40, `${absurd[0].kg}`);
+  check('un volumen inválido cae en la estimación', absurd[0].l === estimateItem('Colilla').l, `${absurd[0].l}`);
+
+  const dup = asNewItems([{ name: 'Cuchillo', kg: 99 }, { name: 'cuchillo', kg: 99 }], []);
+  check('no se duplica lo que ya está en el catálogo base', dup.length === 0);
+
+  const sinNombre = asNewItems([{ kg: 1 }, { name: '   ' }, { name: '123' }], []);
+  check('se descartan objetos sin nombre útil', sinNombre.length === 0);
+
+  check('la estimación distingue tamaños', estimateItem('colilla').kg < estimateItem('tablón de madera').kg);
+  check('la estimación reconoce libros', estimateItem('cuaderno manchado').tags.includes('book'));
+}
+
+// ── Recetas aprendidas desde cualquier fuente ───────────────────────────────
+{
+  let s = newRun();
+  check('no conoce la receta de partida', !s.knownRecipes.includes('Ración de campo'));
+  s = reducer(s, {
+    type: 'applyTurn', rng: seeded(31), playerText: null,
+    result: turn({ recipesLearned: ['Ración de campo', 'Receta Inventada Que No Existe'] }),
+  });
+  check('aprende la receta que el mundo le enseña', s.knownRecipes.includes('Ración de campo'));
+  check('descarta recetas inventadas', !s.knownRecipes.includes('Receta Inventada Que No Existe'));
+  check('lo anuncia en el registro', s.log.some((l) => /Aprendes a fabricar/.test(l.text)));
+
+  // Y sigue funcionando por libro
+  let b = newRun();
+  b = reducer(b, { type: 'applyTurn', rng: seeded(32), playerText: null, result: turn({ itemsGained: [{ name: 'Manual de medicina', qty: 1 }] }) });
+  check('aprende leyendo un libro', b.knownRecipes.includes('Analgésico casero'));
+
+  const parsed = parseTurn('{"narrative":"x","recipesLearned":["racion de campo"]}', 'Inicio');
+  check('el nombre de receta tolera tildes', parsed.result?.recipesLearned[0] === 'Ración de campo');
+}
+
+// ── Sustituciones por clase de material ─────────────────────────────────────
+{
+  // La lanza pide madera + filo. Un bate y un machete deberían valer.
+  const conIdeales = planCraft('Lanza de madera', [{ name: 'Madera', qty: 1 }, { name: 'Cuchillo', qty: 1 }], () => 5, false);
+  check('la receta se cumple con los materiales ideales', conIdeales!.canCraft && conIdeales!.failChance === 0);
+
+  const improvisado = planCraft('Lanza de madera', [{ name: 'Bate de béisbol', qty: 1 }, { name: 'Machete', qty: 1 }], () => 5, false);
+  check('se acepta cualquier cosa que cubra la clase de material', improvisado!.canCraft);
+  check('el material improvisado añade riesgo', improvisado!.failChance > 0, `${improvisado?.failChance}`);
+  check('se indica con qué se sustituye', improvisado!.resolved.some((r) => r.usedSub === 'Bate de béisbol'));
+
+  // Cinta donde la receta pide otra cosa: el kit de reparación pide metal + herramienta.
+  const conCinta = planCraft('Mochila improvisada', [{ name: 'Ropa de abrigo', qty: 2 }, { name: 'Cinta adhesiva', qty: 1 }], () => 5, false);
+  check('la cinta sirve de atadura', conCinta!.canCraft, conCinta?.blockers.join(';'));
+
+  const sinNada = planCraft('Lanza de madera', [{ name: 'Lata de comida', qty: 3 }], () => 5, false);
+  check('sin material de la clase pedida no se puede', !sinNada!.canCraft);
+  check('el bloqueo nombra la clase que falta', /madera|Madera/.test(sinNada!.blockers[0]), sinNada!.blockers[0]);
+
+  // Un objeto inventado en la partida también puede cubrir una clase.
+  const catalogo = { 'Trapo mugriento': { kg: 0.2, l: 0.3, tags: ['craft'], materials: { tela: 0.2 } } };
+  const conInventado = planCraft('Vendas improvisadas', [{ name: 'Trapo mugriento', qty: 1 }], () => 5, false, catalogo);
+  check('un objeto inventado cubre su clase de material', conInventado!.canCraft);
+  check('el objeto inventado arrastra su penalización', conInventado!.failChance === 0.2, `${conInventado?.failChance}`);
+
+  // Se listan las alternativas disponibles
+  const conVarias = planCraft('Vendas improvisadas', [{ name: 'Tela', qty: 2 }, { name: 'Ropa de abrigo', qty: 1 }], () => 5, false);
+  check('se ofrecen las alternativas del inventario', conVarias!.resolved[0].alternatives.includes('Ropa de abrigo'));
+}
+
+// ── Fabricación improvisada ─────────────────────────────────────────────────
+{
+  const plan = {
+    feasible: true, reason: '', minutes: 20, difficulty: 0.3, skill: 'Sastrería',
+    narrative: 'Rasgas la tela con los dientes y las manos.',
+    consumes: [{ name: 'Ropa de abrigo', qty: 1 }],
+    produces: [{ name: 'Camiseta sin mangas', qty: 1 }, { name: 'Vendas x5', qty: 1 }],
+    newItems: [{ name: 'Camiseta sin mangas', kg: 0.3, l: 0.5, tags: ['clothing'], materials: { tela: 0.1 } }],
+  };
+
+  let s = newRun();
+  s = reducer(s, { type: 'applyTurn', rng: seeded(41), playerText: null, result: turn({ itemsGained: [{ name: 'Ropa de abrigo', qty: 1 }] }) });
+  const before = s.minutes;
+
+  const ok = reducer(s, { type: 'improvise', goal: 'hacer una camiseta', plan, rng: () => 0.99 });
+  check('improvisar con éxito produce el objeto', countOfName(ok, 'Camiseta sin mangas') === 1);
+  check('improvisar registra el objeto nuevo', !!ok.customItems['Camiseta sin mangas']);
+  check('improvisar consume el material', countOfName(ok, 'Ropa de abrigo') === 0);
+  check('improvisar consume tiempo', ok.minutes === before + 20, `${ok.minutes - before}`);
+  check('improvisar da experiencia', (ok.skillXp['Sastrería'] ?? 0) > (s.skillXp['Sastrería'] ?? 0));
+  check('improvisar cuenta como fabricado', ok.stats.itemsCrafted === 1);
+  check('improvisar deja rastro en el registro', ok.log.some((l) => l.kind === 'player' && /Improviso/.test(l.text)));
+
+  const fail = reducer(s, { type: 'improvise', goal: 'hacer una camiseta', plan, rng: () => 0 });
+  check('un fallo no produce el objeto', countOfName(fail, 'Camiseta sin mangas') === 0);
+  check('un fallo no ensucia el catálogo', !fail.customItems['Camiseta sin mangas']);
+  check('un fallo consume el material igual', countOfName(fail, 'Ropa de abrigo') === 0);
+
+  // Sin el material, ni se intenta.
+  const sinMaterial = reducer(newRun(), { type: 'improvise', goal: 'x', plan, rng: () => 0.99 });
+  check('sin material no se improvisa', countOfName(sinMaterial, 'Camiseta sin mangas') === 0);
+  check('se avisa de lo que falta', sinMaterial.log.some((l) => /Te falta lo principal/.test(l.text)));
+
+  // Idea imposible
+  const noViable = reducer(s, {
+    type: 'improvise', goal: 'construir un coche',
+    plan: { ...plan, feasible: false, reason: 'No tienes ni chasis ni motor.' }, rng: () => 0.99,
+  });
+  check('una idea inviable se rechaza con motivo', noViable.log.some((l) => /chasis/.test(l.text)));
+  check('una idea inviable no consume nada', countOfName(noViable, 'Ropa de abrigo') === 1);
+
+  // La habilidad alta reduce el riesgo: con dificultad 0.3 y nivel 10 baja a ~0
+  let experto = s;
+  experto = { ...experto, skillXp: { ...experto.skillXp, 'Sastrería': 3550 } };
+  const conPericia = reducer(experto, { type: 'improvise', goal: 'x', plan, rng: () => 0.1 });
+  check('la habilidad alta salva una tirada justa', countOfName(conPericia, 'Camiseta sin mangas') === 1);
+}
+
+// ── Validación del plan de improvisación ────────────────────────────────────
+{
+  const p = parseImprovise(JSON.stringify({
+    feasible: true, consumes: [{ name: 'ropa de abrigo', qty: 1 }],
+    produces: [{ name: 'Camiseta apañada', qty: 1 }],
+    newItems: [{ name: 'Camiseta apañada', kg: 0.3, l: 0.5, tags: ['clothing'] }],
+    minutes: 9999, difficulty: 5, skill: 'sastreria', narrative: 'Rasgas.',
+  }), []);
+  check('el plan se interpreta', p?.feasible === true);
+  check('se acota el tiempo del plan', p?.minutes === 480, `${p?.minutes}`);
+  check('se acota la dificultad', p?.difficulty === 0.95, `${p?.difficulty}`);
+  check('la habilidad se normaliza', p?.skill === 'Sastrería');
+  check('el material a consumir se empareja con el catálogo', p?.consumes[0].name === 'Ropa de abrigo');
+
+  const no = parseImprovise('{"feasible":false,"reason":"Imposible"}', []);
+  check('un plan inviable conserva el motivo', no?.feasible === false && no.reason === 'Imposible');
+
+  const vacio = parseImprovise('{"feasible":true,"produces":[]}', []);
+  check('un plan sin resultado se descarta', vacio === null);
+
+  const basura = parseImprovise('no soy json', []);
+  check('una respuesta ilegible se descarta', basura === null);
 }
 
 // ── Resultado ────────────────────────────────────────────────────────────────

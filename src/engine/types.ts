@@ -35,6 +35,17 @@ export interface ItemDef {
   kg: number;
   l: number;
   tags: string[];
+  /** Descripción corta, sobre todo para los objetos improvisados. */
+  desc?: string;
+  /**
+   * Clases de material que cubre este objeto y lo mal que las cubre.
+   * `{ adhesivo: 0 }` = sirve perfectamente como adhesivo.
+   * `{ adhesivo: 0.25 }` = sirve, pero añade un 25 % de riesgo de fallo.
+   * Es lo que permite usar cinta donde la receta pide pegamento.
+   */
+  materials?: Record<string, number>;
+  /** Objeto introducido durante la partida, no del catálogo base. */
+  improvised?: boolean;
   /** Contenedores amplían la capacidad de carga. */
   isContainer?: boolean;
   extraKg?: number;
@@ -197,6 +208,8 @@ export interface GameState {
   // Inventario y conocimiento
   inventory: Stack[];
   knownRecipes: string[];
+  /** Objetos aparecidos durante la partida que no existen en el catálogo base. */
+  customItems: Record<string, ItemDef>;
 
   // Narrativa
   log: LogEntry[];
@@ -234,4 +247,22 @@ export interface TurnResult {
   mapUpdate: { currentZone: string; type: ZoneType; danger: number; connections: string[] } | null;
   /** Sugerencias de acción contextual redactadas por el narrador. */
   suggestions: string[];
+  /** Objetos nuevos que el mundo introduce en esta escena. */
+  newItems: (ItemDef & { name: string })[];
+  /** Recetas que el personaje aprende aquí (de un libro, de alguien, probando). */
+  recipesLearned: string[];
+}
+
+/** Propuesta de fabricación improvisada, antes de que el motor la resuelva. */
+export interface ImprovisePlan {
+  feasible: boolean;
+  reason: string;
+  consumes: Stack[];
+  produces: Stack[];
+  newItems: (ItemDef & { name: string })[];
+  minutes: number;
+  /** 0 = trivial, 1 = casi imposible. */
+  difficulty: number;
+  skill: string | null;
+  narrative: string;
 }

@@ -4,6 +4,7 @@ import { GENRE_LIST, GENRES } from '../data/genres';
 import { NARRATOR_LIST } from '../data/conditions';
 import { MAX_TRAITS, TRAITS, traitBalance } from '../data/traits';
 import { allMeta, importSave, SLOT_LABEL } from '../persistence/saves';
+import { HAS_BUILT_IN_KEY } from '../persistence/settings';
 import type { GameApi } from '../hooks/useGame';
 import type { GenreId, Screen } from '../engine/types';
 
@@ -98,6 +99,11 @@ export function Intro({ api, onSettings }: { api: GameApi; onSettings: () => voi
             </div>
           </div>
         )}
+        {api.ready && HAS_BUILT_IN_KEY && (
+          <p style={{ fontSize: 11.5, color: 'var(--text-faint)', textAlign: 'center', marginBottom: 14 }}>
+            Clave integrada en esta compilación. Puedes cambiarla en Ajustes.
+          </p>
+        )}
 
         <button
           className="btn btn--primary btn--lg btn--block"
@@ -126,7 +132,7 @@ export function Intro({ api, onSettings }: { api: GameApi; onSettings: () => voi
         {importError && <div className="notice" style={{ marginTop: 12 }}><span aria-hidden>⚠</span>{importError}</div>}
 
         <p style={{ marginTop: 26, fontSize: 11.5, color: 'var(--text-faint)', textAlign: 'center', lineHeight: 1.6 }}>
-          Tu clave de API se guarda solo en este navegador y se envía únicamente al proveedor que elijas.
+          La clave solo sale de aquí para hablar con el proveedor que elijas.
         </p>
       </div>
     </div>

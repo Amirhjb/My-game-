@@ -21,9 +21,15 @@ npm run check    # tipos + pruebas + build — pásalo antes de dar nada por ter
    por `src/ai/schema.ts`: nombres contrastados contra el catálogo, números acotados,
    enumerados validados. Si una mecánica se puede resolver localmente (fabricar, consumir,
    construir), se resuelve localmente.
+   Esto incluye los objetos que el mundo inventa: el modelo propone nombre, peso y
+   etiquetas, y `asNewItems` los acota a rangos plausibles o cae en `estimateItem`.
+   Lo mismo con la improvisación: el modelo juzga si la idea se sostiene, el motor tira
+   el dado y consume los materiales.
 
-3. **Nunca metas credenciales en el código.** La clave la pone el jugador en Ajustes y vive
-   en su `localStorage`.
+3. **La clave de API va en `.env.local`, nunca en un fichero versionado.** El repositorio es
+   público: una clave commiteada la detecta GitHub y el proveedor la revoca sola. `.env.local`
+   se compila dentro de `jugar.html` (así la partida arranca sin escribir nada) pero no se sube.
+   Ajustes sigue permitiendo sobreescribirla por navegador.
 
 4. **Las imágenes van a IndexedDB** (`src/persistence/imageStore.ts`), nunca al estado ni a
    `localStorage`: el estado solo guarda la clave.
@@ -38,6 +44,9 @@ npm run check    # tipos + pruebas + build — pásalo antes de dar nada por ter
 
 ## Dónde está cada cosa
 - Contenido (objetos, arquetipos, rasgos, recetas, climas): `src/data/`
+- Catálogo dinámico: `state.customItems` + `getItem(name, catalogo)` en `src/data/items.ts`
+- Clases de material (lo que permite cinta en vez de pegamento): `MATERIAL_CLASSES` en
+  `src/data/items.ts`, resueltas en `src/engine/crafting.ts`
 - Reglas puras: `src/engine/rules.ts`, `world.ts`, `crafting.ts`
 - Prompts y validación: `src/ai/`
 - Interfaz: `src/components/`, `src/modals/`, `src/screens/`

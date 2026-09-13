@@ -29,9 +29,10 @@ export function suggestActions(state: GameState, fromNarrator: string[]): Sugges
   const weather = WEATHER[state.weather.id];
   const { hunger, thirst, sleep } = state.needs;
 
-  const hasFood = state.inventory.some((s) => getItem(s.name).tags.includes('food'));
-  const hasWater = state.inventory.some((s) => getItem(s.name).tags.includes('water'));
-  const hasMeds = state.inventory.some((s) => getItem(s.name).tags.includes('medical'));
+  const cat = state.customItems;
+  const hasFood = state.inventory.some((s) => getItem(s.name, cat).tags.includes('food'));
+  const hasWater = state.inventory.some((s) => getItem(s.name, cat).tags.includes('water'));
+  const hasMeds = state.inventory.some((s) => getItem(s.name, cat).tags.includes('medical'));
   const atBase = state.base.established && state.map.currentZone === state.base.location;
 
   // 1. Algo te está matando ahora mismo.

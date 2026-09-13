@@ -18,12 +18,23 @@ todo lo demás nuevo: arquitectura, interfaz, reglas y seguridad.
 2. Ábrelo con doble clic en cualquier navegador moderno.
 3. Pulsa **Ajustes**, elige **Groq**, pega tu clave y listo.
 
-`jugar.html` es una copia ya construida. Si tocas el código, regenérala con
-`npm run build:single && cp dist-single/index.html jugar.html`.
+### Opción B — con la clave ya integrada
+
+Si no quieres escribirla nunca, ponla en `.env.local` y compílala dentro del fichero:
+
+```bash
+cp .env.example .env.local   # pega tu clave en VITE_API_KEY
+npm install
+npm run dist                 # genera jugar.html con la clave dentro
+```
+
+Ese `jugar.html` arranca directo, sin pasar por Ajustes. `.env.local` está en `.gitignore`,
+así que la clave no se sube al repositorio — que es lo que hay que evitar, porque
+**este repositorio es público y GitHub revoca automáticamente las claves que detecta en el código.**
 
 Las claves de Groq son gratuitas: <https://console.groq.com/keys>
 
-### Opción B — desde el código
+### Opción C — desde el código
 
 ```bash
 npm install
@@ -47,8 +58,8 @@ npm run check         # tipos + pruebas + build
 `localStorage` de tu navegador y únicamente se envía al proveedor que elijas.
 
 > ⚠️ **Si vienes del prototipo anterior:** aquel HTML llevaba una clave de Groq escrita
-> en el código fuente. Cualquiera que abriese el fichero podía leerla y gastarla.
-> **Revócala en <https://console.groq.com/keys> y genera una nueva.**
+> en el código fuente y el repositorio es público. **Revócala en
+> <https://console.groq.com/keys> y genera una nueva** para `.env.local`.
 
 Proveedores soportados (cualquiera compatible con la API de OpenAI):
 
@@ -89,8 +100,21 @@ interfaz, que deriva de un único tono OKLCH por género.
 - **6 enfermedades** con tres estadios cada una, contagio ambiental y curas concretas.
 - **Clima** con previsión a 5 días y efectos reales: la lluvia corrosiva te quema, la
   ventisca te congela si no llevas abrigo, la tormenta eléctrica fríe tu linterna.
-- **Fabricación determinista**: 18 recetas con ingredientes, sustitutos arriesgados,
-  requisitos de habilidad y probabilidad de fallo. **El motor consume y produce, no la IA.**
+- **Catálogo de objetos abierto.** Los 80 objetos del catálogo base son solo el punto de
+  partida: si buscas en un cenicero, el mundo puede crear una colilla concreta, con su peso
+  real (10 g, no 300) y su utilidad (arde). Los objetos nuevos se validan, se acotan a rangos
+  plausibles, se guardan con la partida y cuentan para la carga como cualquier otro.
+- **Fabricación determinista**: 19 recetas con ingredientes, requisitos de habilidad y
+  probabilidad de fallo. **El motor consume y produce, no la IA.**
+- **Sustitución por clase de material.** Las recetas no piden un objeto concreto sino lo que
+  hace falta: *un filo*, *una atadura*, *un adhesivo*. Cualquier cosa que cumpla esa función
+  vale — cinta donde pedía pegamento, un machete donde pedía cuchillo — con más riesgo de
+  fallo cuanto peor sea el apaño. El manual te dice qué alternativas llevas encima.
+- **Improvisación sin receta.** Describes lo que quieres apañar («arranco las mangas de la
+  camisa para hacer vendas») y el juego lo arbitra: el modelo decide si la idea se sostiene
+  y con qué, el motor tira el dado contra tu habilidad, gasta el material y crea el objeto.
+- **Recetas que se aprenden jugando**, no solo de los libros: unas notas en una pared,
+  alguien que te lo explica, probar hasta que sale.
 - **Refugio** con 7 construcciones: camastro, almacén, huerto, recogida de agua, taller,
   muro y generador. Producen recursos mientras estás fuera; sin muro, te lo saquean.
 - **Mapa procedural** navegable con zonas conectadas, tipos y nivel de peligro.
@@ -136,7 +160,8 @@ pura. La IA propone; el reducer dispone. Eso hace el juego testeable (`npm test`
 
 | Quieres… | Toca… |
 |---|---|
-| un objeto nuevo | `src/data/items.ts` (con `use` si es consumible) |
+| un objeto nuevo | `src/data/items.ts` (con `use` si es consumible, `materials` si sustituye) |
+| una clase de material | `MATERIAL_CLASSES` en `src/data/items.ts` |
 | una receta | `src/data/recipes.ts` |
 | un arquetipo | `src/data/archetypes.ts` (necesita nombre para los 5 géneros) |
 | un rasgo | `src/data/traits.ts` |

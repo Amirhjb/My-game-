@@ -12,9 +12,13 @@ import {
 import {
   advanceWeather, applyMapUpdate, buildForecast, currentNode, isSheltered, rollWeather, weatherImpact,
 } from './world';
-import { MAX_HISTORY, MAX_LOG, MAX_PHOTOS, INITIAL_BASE, INITIAL_NEEDS, initialState, makeEntry, uid } from './state';
+import {
+  MAX_CUSTOM_ITEMS, MAX_HISTORY, MAX_LOG, MAX_PHOTOS, INITIAL_BASE, INITIAL_NEEDS,
+  initialState, makeEntry, uid,
+} from './state';
 import type {
-  ActiveDisease, DiaryEntry, GameState, GenreId, Injury, LogEntry, Photo, Stack, StructureId, TurnResult,
+  ActiveDisease, DiaryEntry, GameState, GenreId, ImprovisePlan, Injury, ItemDef, LogEntry,
+  Photo, Stack, StructureId, TurnResult,
 } from './types';
 
 export type Action =
@@ -30,6 +34,8 @@ export type Action =
   | { type: 'useItem'; name: string }
   | { type: 'dropItem'; name: string; qty: number }
   | { type: 'craft'; recipeId: string; rng?: () => number }
+  | { type: 'improvise'; goal: string; plan: ImprovisePlan; rng?: () => number }
+  | { type: 'registerItems'; items: (ItemDef & { name: string })[] }
   | { type: 'learnRecipes'; ids: string[] }
   | { type: 'establishBase' }
   | { type: 'returnToBase'; rng?: () => number }
@@ -78,6 +84,25 @@ function grantXp(
   return { skillXp: out, levelUps };
 }
 
+/**
+ * Añade al catálogo de la partida los objetos que el mundo acaba de introducir.
+ * Se descarta lo que ya existe y se respeta un tope para no inflar el guardado.
+ */
+function registerItems(
+  current: Record<string, ItemDef>, incoming: (ItemDef & { name: string })[],
+): { items: Record<string, ItemDef>; added: string[] } {
+  const added: string[] = [];
+  if (!incoming.length) return { items: current, added };
+  const items = { ...current };
+  for (const { name, ...def } of incoming) {
+    if (items[name]) continue;
+    if (Object.keys(items).length >= MAX_CUSTOM_ITEMS) break;
+    items[name] = def;
+    added.push(name);
+  }
+  return added.length ? { items, added } : { items: current, added };
+}
+
 function deathCauseFrom(state: GameState): string {
   if (state.needs.thirst <= 0) return 'Deshidratación';
   if (state.needs.hunger <= 0) return 'Inanición';
@@ -103,7 +128,15 @@ function applyTurn(state: GameState, playerText: string | null, result: TurnResu
   const nextMinutes = state.minutes + minutes;
   const day = dayOf(nextMinutes);
 
-  // 1) Objetos ganados y perdidos.
+  // 1) El mundo puede traer objetos que no estaban en el catálogo (una colilla,
+  //    una chapa, el cuaderno de otro). Se registran antes de repartirlos.
+  const registered = registerItems(state.customItems, result.newItems);
+  const customItems = registered.items;
+  if (registered.added.length) {
+    msgs.push({ kind: 'system', text: `Anotas en tu inventario algo que no habías visto antes: ${registered.added.join(', ')}.` });
+  }
+
+  // 2) Objetos ganados y perdidos.
   let inventory = state.inventory;
   if (result.itemsGained.length) {
     inventory = addItems(inventory, result.itemsGained);
@@ -117,7 +150,7 @@ function applyTurn(state: GameState, playerText: string | null, result: TurnResu
     }
   }
 
-  // 2) Recetas aprendidas al conseguir un libro.
+  // 3) Recetas aprendidas: por libro o porque el mundo te las ha enseñado.
   let knownRecipes = state.knownRecipes;
   for (const { name } of result.itemsGained) {
     const learned = (BOOK_RECIPES[name] ?? []).filter((r) => !knownRecipes.includes(r));
@@ -126,8 +159,15 @@ function applyTurn(state: GameState, playerText: string | null, result: TurnResu
       msgs.push({ kind: 'good', text: `Leyendo «${name}» aprendes: ${learned.join(', ')}.` });
     }
   }
+  // El narrador también puede enseñarte una receta sin libro de por medio:
+  // unas notas en una pared, alguien que te lo explica, probar hasta que sale.
+  const taught = result.recipesLearned.filter((r) => RECIPE_BY_ID[r] && !knownRecipes.includes(r));
+  if (taught.length) {
+    knownRecipes = [...knownRecipes, ...taught];
+    msgs.push({ kind: 'good', text: `Aprendes a fabricar: ${taught.join(', ')}.` });
+  }
 
-  // 3) Mapa (antes que el clima: el refugio depende de la zona nueva).
+  // 4) Mapa (antes que el clima: el refugio depende de la zona nueva).
   let map = state.map;
   let zonesDiscovered = state.stats.zonesDiscovered;
   if (result.mapUpdate) {
@@ -139,18 +179,18 @@ function applyTurn(state: GameState, playerText: string | null, result: TurnResu
     }
   }
 
-  // 4) Clima.
+  // 5) Clima.
   const adv = advanceWeather(state, minutes, genre, rng);
   if (adv.changed && adv.weather.id !== state.weather.id) {
     const w = WEATHER[adv.weather.id];
     msgs.push({ kind: w.severe ? 'warn' : 'system', text: `Cambia el tiempo: ${w.label.toLowerCase()}. ${w.desc}` });
   }
   const sheltered = isSheltered(map);
-  const impact = weatherImpact(adv.weather, sheltered, inventory, minutes, state.traits, rng);
+  const impact = weatherImpact(adv.weather, sheltered, inventory, minutes, state.traits, rng, customItems);
   if (impact.lose.length) inventory = removeItems(inventory, impact.lose);
   for (const m of impact.messages) msgs.push({ kind: impact.hp < 0 ? 'bad' : 'system', text: m });
 
-  // 5) Lesiones: las que indica el narrador + curación natural.
+  // 6) Lesiones: las que indica el narrador + curación natural.
   let injuries: Injury[] = state.injuries.map((i) => ({ ...i }));
   for (const upd of result.injuriesUpdate) {
     if (!INJURY_ZONE_IDS.includes(upd.zone)) continue;
@@ -178,7 +218,7 @@ function applyTurn(state: GameState, playerText: string | null, result: TurnResu
   injuries = healed.injuries;
   for (const m of healed.messages) msgs.push({ kind: 'good', text: m });
 
-  // 6) Enfermedades: las del narrador + progresión + riesgo ambiental.
+  // 7) Enfermedades: las del narrador + progresión + riesgo ambiental.
   let diseases: ActiveDisease[] = state.diseases.map((d) => ({ ...d }));
   for (const upd of result.diseasesUpdate) {
     if (!(upd.id in DISEASES)) continue;
@@ -201,7 +241,7 @@ function applyTurn(state: GameState, playerText: string | null, result: TurnResu
   for (const d of risk.add) if (!diseases.some((x) => x.id === d.id)) diseases.push(d);
   for (const m of risk.messages) msgs.push({ kind: 'bad', text: m });
 
-  // 7) Necesidades y daño acumulado — una sola vez, con todo lo anterior ya resuelto.
+  // 8) Necesidades y daño acumulado — una sola vez, con todo lo anterior ya resuelto.
   const tick = tickNeeds(state.needs, minutes, state.traits, diseases, {
     hunger: clamp(result.hungerChange, -40, 60) + (impact.needs.hunger ?? 0),
     thirst: clamp(result.thirstChange, -40, 60) + (impact.needs.thirst ?? 0),
@@ -210,17 +250,17 @@ function applyTurn(state: GameState, playerText: string | null, result: TurnResu
   });
   for (const w of tick.warnings) msgs.push({ kind: 'warn', text: w });
 
-  // 8) Vida.
+  // 9) Vida.
   const hpChange = clamp(Math.round(result.hpChange), -60, 40);
   const totalHp = hpChange + impact.hp + tick.hpDelta;
   const hp = clamp(state.hp + totalHp, 0, state.maxHp);
   const damageTaken = state.stats.damageTaken + Math.max(0, -totalHp);
 
-  // 9) Experiencia.
+  // 10) Experiencia.
   const { skillXp, levelUps } = grantXp(state.skillXp, result.skillXp);
   for (const l of levelUps) msgs.push({ kind: 'good', text: `⬆ ${l}` });
 
-  // 10) Rasgos con efecto periódico.
+  // 11) Rasgos con efecto periódico.
   const counters = { ...state.counters };
   let modifiers = state.modifiers;
   let extraHp = 0;
@@ -264,7 +304,7 @@ function applyTurn(state: GameState, playerText: string | null, result: TurnResu
     }
   }
 
-  // 11) Modificadores temporales.
+  // 12) Modificadores temporales.
   if (impact.modifier) {
     modifiers = upsertModifier(modifiers, { ...impact.modifier, kind: 'debuff' });
   }
@@ -279,6 +319,7 @@ function applyTurn(state: GameState, playerText: string | null, result: TurnResu
     minutes: nextMinutes,
     inventory,
     knownRecipes,
+    customItems,
     map,
     location: result.location?.trim() || map.currentZone || state.location,
     weather: adv.weather,
@@ -392,7 +433,7 @@ export function reducer(state: GameState, action: Action): GameState {
       return applyTurn(state, action.playerText, action.result, action.rng ?? R);
 
     case 'useItem': {
-      const def = getItem(action.name);
+      const def = getItem(action.name, state.customItems);
       if (!def.use || countOf(state.inventory, action.name) < 1) return state;
       const u = def.use;
       const minutes = u.minutes ?? 5;
@@ -446,7 +487,7 @@ export function reducer(state: GameState, action: Action): GameState {
 
     case 'craft': {
       const rng = action.rng ?? R;
-      const plan = planCraft(action.recipeId, state.inventory, (s) => effectiveLevel(state, s), isAtWorkshop(state));
+      const plan = planCraft(action.recipeId, state.inventory, (s) => effectiveLevel(state, s), isAtWorkshop(state), state.customItems);
       if (!plan) return state;
       if (!plan.canCraft) {
         return withLog(state, [{ kind: 'warn', text: plan.blockers.join('. ') }]);
@@ -470,6 +511,89 @@ export function reducer(state: GameState, action: Action): GameState {
       next = withLog(next, msgs);
       if (next.hp <= 0) next = { ...next, screen: 'death', deathCause: deathCauseFrom(next) };
       return next;
+    }
+
+    case 'improvise': {
+      const rng = action.rng ?? R;
+      const plan = action.plan;
+      if (!plan.feasible) {
+        return withLog(state, [
+          { kind: 'player', text: `Intento improvisar: ${action.goal}` },
+          { kind: 'warn', text: plan.reason || 'No consigues apañar nada con lo que llevas encima.' },
+        ]);
+      }
+
+      // El motor comprueba que de verdad tienes lo que vas a gastar.
+      const missing = plan.consumes.filter((c) => countOf(state.inventory, c.name) < c.qty);
+      if (missing.length) {
+        return withLog(state, [
+          { kind: 'player', text: `Intento improvisar: ${action.goal}` },
+          { kind: 'warn', text: `Te falta lo principal: ${missing.map((m) => `${m.name} ×${m.qty}`).join(', ')}.` },
+        ]);
+      }
+
+      // La habilidad relevante baja la dificultad: nivel 10 se come medio riesgo.
+      const level = plan.skill ? effectiveLevel(state, plan.skill) : 3;
+      const difficulty = clamp(plan.difficulty - (level - 1) * 0.05, 0.02, 0.95);
+      const success = rng() >= difficulty;
+
+      const registered = registerItems(state.customItems, plan.newItems);
+      let inventory = removeItems(state.inventory, plan.consumes);
+
+      const msgs: { kind: LogEntry['kind']; text: string }[] = [
+        { kind: 'player', text: `Improviso: ${action.goal}` },
+      ];
+      if (plan.narrative) msgs.push({ kind: 'story', text: plan.narrative });
+
+      let minutes = plan.minutes;
+      let xp: Record<string, number> = {};
+
+      if (success) {
+        inventory = addItems(inventory, plan.produces);
+        msgs.push({
+          kind: 'good',
+          text: `Te sale: ${plan.produces.map((p) => `${p.name}${p.qty > 1 ? ` ×${p.qty}` : ''}`).join(', ')}.`
+            + (plan.consumes.length ? ` Has gastado ${plan.consumes.map((c) => c.name).join(', ')}.` : ''),
+        });
+        if (plan.skill) xp = { [plan.skill]: Math.max(1, Math.round(difficulty * 8)) };
+      } else {
+        // Un fallo devuelve la mitad de lo gastado, como en el crafteo con receta.
+        const salvage = plan.consumes
+          .map((c) => ({ name: c.name, qty: Math.floor(c.qty / 2) }))
+          .filter((c) => c.qty > 0);
+        inventory = addItems(inventory, salvage);
+        minutes = Math.round(plan.minutes * 0.6);
+        msgs.push({
+          kind: 'bad',
+          text: 'No sale. Entre las manos se te queda una cosa inservible'
+            + (salvage.length ? `, aunque recuperas ${salvage.map((c) => c.name).join(', ')}.` : '.'),
+        });
+        if (plan.skill) xp = { [plan.skill]: 1 };
+      }
+
+      const { skillXp, levelUps } = grantXp(state.skillXp, xp);
+      for (const l of levelUps) msgs.push({ kind: 'good', text: `⬆ ${l}` });
+      const tick = tickNeeds(state.needs, minutes, state.traits, state.diseases);
+
+      let next: GameState = {
+        ...state,
+        inventory,
+        customItems: success ? registered.items : state.customItems,
+        skillXp,
+        needs: tick.needs,
+        hp: clamp(state.hp + tick.hpDelta, 0, state.maxHp),
+        minutes: state.minutes + minutes,
+        stats: { ...state.stats, itemsCrafted: state.stats.itemsCrafted + (success ? 1 : 0) },
+      };
+      next = withLog(next, msgs);
+      if (next.hp <= 0) next = { ...next, screen: 'death', deathCause: deathCauseFrom(next) };
+      return next;
+    }
+
+    case 'registerItems': {
+      const registered = registerItems(state.customItems, action.items);
+      if (!registered.added.length) return state;
+      return { ...state, customItems: registered.items };
     }
 
     case 'learnRecipes': {
@@ -652,6 +776,7 @@ export function capacityView(state: GameState) {
     state.inventory,
     effectiveLevel(state, 'Fuerza'),
     state.base.established && state.base.structures.includes('almacen') && state.map.currentZone === state.base.location,
+    state.customItems,
   );
 }
 

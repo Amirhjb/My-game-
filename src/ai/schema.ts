@@ -1,9 +1,12 @@
-import { ITEM_NAMES, isKnownItem } from '../data/items';
+import { ITEM_NAMES, MATERIAL_IDS, VALID_TAGS, estimateItem, isKnownItem } from '../data/items';
+import { RECIPE_BY_ID } from '../data/recipes';
 import { ALL_SKILLS } from '../data/skills';
 import { DISEASE_IDS } from '../data/conditions';
 import { INJURY_ZONE_IDS } from '../data/skills';
 import { clamp } from '../engine/rules';
-import type { DiseaseId, InjuryZone, Stack, TurnResult, ZoneType } from '../engine/types';
+import type {
+  DiseaseId, ImprovisePlan, InjuryZone, ItemDef, Stack, TurnResult, ZoneType,
+} from '../engine/types';
 
 const ZONE_TYPES: ZoneType[] = ['urban', 'wilderness', 'indoor', 'underground', 'water'];
 
@@ -52,35 +55,126 @@ const normalize = (s: string) =>
 
 const ITEM_INDEX = new Map(ITEM_NAMES.map((n) => [normalize(n), n]));
 
-export function matchItemName(raw: string): string | null {
+/**
+ * Empareja un nombre libre con algo que exista de verdad: el catálogo base o
+ * los objetos que hayan aparecido durante esta partida.
+ */
+export function matchItemName(raw: string, known: string[] = []): string | null {
   const name = raw.trim();
   if (!name) return null;
   if (isKnownItem(name)) return name;
-  const exact = ITEM_INDEX.get(normalize(name));
-  if (exact) return exact;
-  // Coincidencia parcial: "botiquin" → "Botiquín pequeño".
+  if (known.includes(name)) return name;
+
   const n = normalize(name);
+  const exact = ITEM_INDEX.get(n);
+  if (exact) return exact;
+  for (const k of known) if (normalize(k) === n) return k;
+
+  // Coincidencia parcial: "botiquin" → "Botiquín pequeño".
   if (n.length < 4) return null;
+  for (const k of known) {
+    const kn = normalize(k);
+    if (kn.includes(n) || n.includes(kn)) return k;
+  }
   for (const [key, value] of ITEM_INDEX) {
     if (key.includes(n) || n.includes(key)) return value;
   }
   return null;
 }
 
-function asStacks(v: unknown, limit = 6): Stack[] {
+/** Nombre limpio para un objeto que el mundo acaba de inventar. */
+function cleanItemName(raw: string): string | null {
+  const name = raw.trim().replace(/\s+/g, ' ').slice(0, 42);
+  if (name.length < 2) return null;
+  if (/^[\d\s.,;:_-]+$/.test(name)) return null;
+  return name[0].toUpperCase() + name.slice(1);
+}
+
+/**
+ * Valida los objetos que el mundo introduce. El modelo propone nombre, peso,
+ * volumen y etiquetas; aquí se acota todo a rangos plausibles y, si los números
+ * vienen absurdos o ausentes, se usa la estimación por palabra clave.
+ */
+export function asNewItems(v: unknown, existing: string[], limit = 3): (ItemDef & { name: string })[] {
+  if (!Array.isArray(v)) return [];
+  const out: (ItemDef & { name: string })[] = [];
+  for (const raw of v.slice(0, limit)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const o = raw as Record<string, unknown>;
+    const name = cleanItemName(asString(o.name));
+    if (!name) continue;
+    if (isKnownItem(name) || existing.includes(name) || out.some((i) => i.name === name)) continue;
+    // Si ya se parece mucho a algo del catálogo, no creamos un duplicado.
+    if (matchItemName(name, existing)) continue;
+
+    const guess = estimateItem(name);
+    const kgRaw = asNumber(o.kg, NaN);
+    const lRaw = asNumber(o.l, NaN);
+    const kg = Number.isFinite(kgRaw) && kgRaw > 0 ? clamp(kgRaw, 0.005, 40) : guess.kg;
+    const l = Number.isFinite(lRaw) && lRaw > 0 ? clamp(lRaw, 0.005, 60) : guess.l;
+
+    const tags = Array.isArray(o.tags)
+      ? (o.tags as unknown[]).filter((t): t is string => typeof t === 'string')
+          .map((t) => t.trim().toLowerCase())
+          .filter((t) => VALID_TAGS.includes(t))
+          .slice(0, 5)
+      : guess.tags;
+
+    const materials: Record<string, number> = {};
+    if (o.materials && typeof o.materials === 'object') {
+      for (const [k, val] of Object.entries(o.materials as Record<string, unknown>)) {
+        const cls = k.trim().toLowerCase();
+        if (!MATERIAL_IDS.includes(cls)) continue;
+        materials[cls] = clamp(asNumber(val, 0.2), 0, 0.6);
+        if (Object.keys(materials).length >= 4) break;
+      }
+    }
+
+    out.push({
+      name,
+      kg: Math.round(kg * 1000) / 1000,
+      l: Math.round(l * 1000) / 1000,
+      tags: tags.length ? tags : guess.tags,
+      desc: asString(o.desc).slice(0, 120) || undefined,
+      materials: Object.keys(materials).length ? materials : undefined,
+      improvised: true,
+    });
+  }
+  return out;
+}
+
+/** Recetas del catálogo que el personaje acaba de aprender. */
+function asRecipesLearned(v: unknown): string[] {
+  const list = Array.isArray(v) ? v : typeof v === 'string' ? [v] : [];
+  const out: string[] = [];
+  for (const raw of list.slice(0, 6)) {
+    if (typeof raw !== 'string') continue;
+    const id = raw.trim();
+    if (RECIPE_BY_ID[id]) { out.push(id); continue; }
+    const n = normalize(id);
+    const found = Object.keys(RECIPE_BY_ID).find((r) => normalize(r) === n);
+    if (found) out.push(found);
+  }
+  return [...new Set(out)];
+}
+
+function asStacks(v: unknown, known: string[], limit = 6): Stack[] {
   if (!Array.isArray(v)) return [];
   const out: Stack[] = [];
   for (const raw of v.slice(0, limit)) {
     if (typeof raw === 'string') {
-      const name = matchItemName(raw);
+      const name = matchItemName(raw, known);
       if (name) out.push({ name, qty: 1 });
       continue;
     }
     if (!raw || typeof raw !== 'object') continue;
     const obj = raw as Record<string, unknown>;
-    const name = matchItemName(asString(obj.name));
+    const name = matchItemName(asString(obj.name), known);
     if (!name) continue;
-    out.push({ name, qty: clamp(Math.round(asNumber(obj.qty, 1)), 1, 20) });
+    const existing = out.find((o) => o.name === name);
+    const qty = clamp(Math.round(asNumber(obj.qty, 1)), 1, 20);
+    if (existing) existing.qty += qty;
+    else out.push({ name, qty });
   }
   return out;
 }
@@ -151,7 +245,7 @@ export interface ParseOutcome {
 }
 
 /** Convierte la respuesta del modelo en un TurnResult seguro y acotado. */
-export function parseTurn(raw: string, fallbackZone: string): ParseOutcome {
+export function parseTurn(raw: string, fallbackZone: string, known: string[] = []): ParseOutcome {
   const data = extractJson(raw);
   if (!data || typeof data !== 'object') {
     const text = raw.replace(/```(?:json)?/gi, '').trim();
@@ -163,6 +257,11 @@ export function parseTurn(raw: string, fallbackZone: string): ParseOutcome {
     return { result: null, fallbackNarrative: null };
   }
 
+  // Los objetos nuevos se validan primero: lo que el mundo acaba de inventar
+  // tiene que existir antes de que `itemsGained` pueda referirse a ello.
+  const newItems = asNewItems(o.newItems, known);
+  const catalogNames = [...known, ...newItems.map((i) => i.name)];
+
   const mapRaw = o.mapUpdate && typeof o.mapUpdate === 'object' ? (o.mapUpdate as Record<string, unknown>) : null;
   const zoneName = asString(mapRaw?.currentZone) || asString(o.location) || fallbackZone;
   const type = asString(mapRaw?.type) as ZoneType;
@@ -171,8 +270,8 @@ export function parseTurn(raw: string, fallbackZone: string): ParseOutcome {
     result: {
       narrative: narrative.slice(0, 4000),
       hpChange: clamp(Math.round(asNumber(o.hpChange)), -60, 40),
-      itemsGained: asStacks(o.itemsGained),
-      itemsLost: asStacks(o.itemsLost),
+      itemsGained: asStacks(o.itemsGained, catalogNames),
+      itemsLost: asStacks(o.itemsLost, catalogNames),
       skillXp: asSkillXp(o.skillXp),
       timeMinutes: clamp(Math.round(asNumber(o.timeMinutes, 10)), 1, 720),
       hungerChange: clamp(Math.round(asNumber(o.hungerChange)), -40, 60),
@@ -198,8 +297,51 @@ export function parseTurn(raw: string, fallbackZone: string): ParseOutcome {
           }
         : null,
       suggestions: asSuggestions(o.suggestions),
+      newItems,
+      recipesLearned: asRecipesLearned(o.recipesLearned),
     },
     fallbackNarrative: null,
+  };
+}
+
+/**
+ * Valida la propuesta de fabricación improvisada. El modelo juzga si la idea es
+ * plausible y con qué; el motor decide si sale bien (ver `engine/reducer.ts`).
+ */
+export function parseImprovise(raw: string, known: string[]): ImprovisePlan | null {
+  const data = extractJson(raw);
+  if (!data || typeof data !== 'object') return null;
+  const o = data as Record<string, unknown>;
+
+  const narrative = asString(o.narrative).slice(0, 1200);
+  const reason = asString(o.reason).slice(0, 240);
+  const feasible = o.feasible === true || o.feasible === 'true';
+  if (!feasible) {
+    return {
+      feasible: false, reason: reason || 'No hay forma de hacer eso con lo que llevas.',
+      consumes: [], produces: [], newItems: [], minutes: 0, difficulty: 1, skill: null,
+      narrative,
+    };
+  }
+
+  const newItems = asNewItems(o.newItems, known, 2);
+  const catalogNames = [...known, ...newItems.map((i) => i.name)];
+  const produces = asStacks(o.produces, catalogNames, 3);
+  if (!produces.length) return null;
+
+  const skillRaw = asString(o.skill);
+  const skill = ALL_SKILLS.find((sk) => normalize(sk) === normalize(skillRaw)) ?? null;
+
+  return {
+    feasible: true,
+    reason,
+    consumes: asStacks(o.consumes, known, 5),
+    produces,
+    newItems,
+    minutes: clamp(Math.round(asNumber(o.minutes, 20)), 1, 480),
+    difficulty: clamp(asNumber(o.difficulty, 0.3), 0, 0.95),
+    skill,
+    narrative,
   };
 }
 
@@ -211,5 +353,6 @@ export function neutralTurn(narrative: string, zone: string): TurnResult {
     timeMinutes: 10, hungerChange: 0, thirstChange: 0, sleepChange: 0, tempChange: 0,
     sceneDescription: '', location: zone,
     injuriesUpdate: [], diseasesUpdate: [], mapUpdate: null, suggestions: [],
+    newItems: [], recipesLearned: [],
   };
 }

@@ -1,4 +1,4 @@
-import { getItem } from '../data/items';
+import { getItem, type ItemCatalog } from '../data/items';
 import { DISEASES } from '../data/conditions';
 import { INJURY_ZONES, ALL_SKILLS, xpToLevel } from '../data/skills';
 import { TRAIT_BY_ID } from '../data/traits';
@@ -11,6 +11,7 @@ import type {
 // ─────────────────────────────────────────────────────────────────────────────
 export const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 export const round1 = (v: number) => Math.round(v * 10) / 10;
+export const round2 = (v: number) => Math.round(v * 100) / 100;
 
 export const DAY_MINUTES = 1440;
 
@@ -73,8 +74,8 @@ export function hasItem(list: Stack[], name: string, qty = 1): boolean {
   return countOf(list, name) >= qty;
 }
 
-export function hasTagged(list: Stack[], tag: string): boolean {
-  return list.some((s) => getItem(s.name).tags.includes(tag));
+export function hasTagged(list: Stack[], tag: string, catalog?: ItemCatalog): boolean {
+  return list.some((s) => getItem(s.name, catalog).tags.includes(tag));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -82,13 +83,15 @@ export function hasTagged(list: Stack[], tag: string): boolean {
 // ─────────────────────────────────────────────────────────────────────────────
 export interface Capacity { maxKg: number; maxL: number; usedKg: number; usedL: number; over: boolean }
 
-export function capacityOf(inventory: Stack[], forceLevel: number, hasWarehouse: boolean): Capacity {
+export function capacityOf(
+  inventory: Stack[], forceLevel: number, hasWarehouse: boolean, catalog?: ItemCatalog,
+): Capacity {
   let maxKg = 8 + forceLevel * 1.5;
   let maxL = 6 + forceLevel * 1.2;
   let usedKg = 0;
   let usedL = 0;
   for (const { name, qty } of inventory) {
-    const it = getItem(name);
+    const it = getItem(name, catalog);
     usedKg += it.kg * qty;
     usedL += it.l * qty;
     if (it.isContainer) {
@@ -99,7 +102,8 @@ export function capacityOf(inventory: Stack[], forceLevel: number, hasWarehouse:
   if (hasWarehouse) { maxKg += 20; maxL += 25; }
   return {
     maxKg: round1(maxKg), maxL: round1(maxL),
-    usedKg: round1(usedKg), usedL: round1(usedL),
+    // Dos decimales: con uno solo, cuatro colillas pesaban cero.
+    usedKg: round2(usedKg), usedL: round2(usedL),
     over: usedKg > maxKg + 0.01 || usedL > maxL + 0.01,
   };
 }

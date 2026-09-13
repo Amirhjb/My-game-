@@ -3,9 +3,10 @@ import { AiError, chat } from '../ai/client';
 import { fetchSceneImage } from '../ai/images';
 import { imageUrl } from '../persistence/imageStore';
 import {
-  buildCaptionPrompt, buildDiaryPrompt, buildOpeningMessage, buildStylePrompt, buildSystemPrompt,
+  buildCaptionPrompt, buildDiaryPrompt, buildImprovisePrompt, buildOpeningMessage,
+  buildStylePrompt, buildSystemPrompt,
 } from '../ai/prompts';
-import { extractJson, neutralTurn, parseTurn } from '../ai/schema';
+import { extractJson, neutralTurn, parseImprovise, parseTurn } from '../ai/schema';
 import { reducer, type Action } from '../engine/reducer';
 import { clockOf, dayOf } from '../engine/rules';
 import { initialState, uid } from '../engine/state';
@@ -15,7 +16,7 @@ import {
 } from '../persistence/saves';
 import { isConfigured, loadSettings, saveSettings, type Settings } from '../persistence/settings';
 
-export type Status = 'idle' | 'thinking' | 'imaging' | 'error';
+export type Status = 'idle' | 'thinking' | 'imaging' | 'improvising' | 'error';
 
 export interface GameApi {
   state: GameState;
@@ -36,6 +37,7 @@ export interface GameApi {
   retry: () => void;
   cancel: () => void;
   takePhoto: () => void;
+  improvise: (goal: string) => Promise<void>;
   ready: boolean;
 }
 
@@ -191,7 +193,8 @@ export function useGame(): GameApi {
           signal: controller.signal, timeoutMs: NARRATIVE_TIMEOUT,
         });
 
-        let { result, fallbackNarrative } = parseTurn(raw, snapshot.map.currentZone || 'Inicio');
+        const known = Object.keys(snapshot.customItems);
+        let { result, fallbackNarrative } = parseTurn(raw, snapshot.map.currentZone || 'Inicio', known);
 
         // Un reintento con instrucción explícita suele arreglar el JSON roto.
         if (!result) {
@@ -201,7 +204,7 @@ export function useGame(): GameApi {
               { role: 'user' as const, content: 'Tu respuesta no era JSON válido. Repítela EXACTAMENTE en el formato JSON indicado, sin texto adicional.' }],
             { temperature: 0.4, maxTokens: 1500, json: true, signal: controller.signal, timeoutMs: 60_000 },
           ).catch(() => '');
-          result = parseTurn(retryRaw, snapshot.map.currentZone || 'Inicio').result;
+          result = parseTurn(retryRaw, snapshot.map.currentZone || 'Inicio', known).result;
         }
 
         let turn: TurnResult;
@@ -317,10 +320,52 @@ export function useGame(): GameApi {
     dispatch({ type: 'log', kind: 'good', text: `Foto guardada en el álbum: «${caption}»` });
   }, []);
 
+  /**
+   * Fabricación sin receta: el modelo juzga si la idea se sostiene y con qué;
+   * el motor tira el dado, consume los materiales y aplica el resultado.
+   */
+  const improvise = useCallback(async (goal: string) => {
+    const clean = goal.trim();
+    if (!clean) return;
+    if (!isConfigured(settingsRef.current)) {
+      setError('Configura el proveedor de IA en Ajustes para poder improvisar.');
+      return;
+    }
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setStatus('improvising');
+    setError(null);
+
+    const snapshot = stateRef.current;
+    try {
+      const raw = await chat(
+        settingsRef.current,
+        [{ role: 'user', content: buildImprovisePrompt(snapshot, clean.slice(0, 200)) }],
+        { temperature: 0.6, maxTokens: 700, json: true, signal: controller.signal, timeoutMs: 60_000 },
+      );
+      const plan = parseImprovise(raw, Object.keys(snapshot.customItems));
+      if (!plan) {
+        throw new AiError('No se ha podido interpretar la respuesta. Prueba a describirlo de otra forma.', 'empty');
+      }
+      dispatch({ type: 'improvise', goal: clean.slice(0, 200), plan });
+      setStatus('idle');
+    } catch (err) {
+      if (err instanceof AiError && err.kind === 'abort' && controller.signal.aborted) {
+        setStatus('idle');
+        return;
+      }
+      setError(err instanceof Error ? err.message : 'Error al improvisar.');
+      setStatus('error');
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null;
+    }
+  }, []);
+
   // ── Atajos de teclado globales ────────────────────────────────────────────
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && status === 'thinking') cancel();
+      if (e.key === 'Escape' && (status === 'thinking' || status === 'improvising')) cancel();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -330,6 +375,7 @@ export function useGame(): GameApi {
     state, dispatch, settings, updateSettings, status, error, clearError,
     suggestions, sceneUrl, flash, saveNow, loadSlot, loadState, begin, act, retry, cancel,
     takePhoto: () => { void takePhoto(); },
+    improvise,
     ready,
   };
 }

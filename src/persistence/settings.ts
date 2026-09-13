@@ -1,8 +1,27 @@
 /**
- * Configuración del proveedor de IA. La clave se guarda SOLO en el navegador
- * del jugador (localStorage) y nunca viaja a ningún sitio salvo al endpoint
- * que el propio jugador configure.
+ * Configuración del proveedor de IA.
+ *
+ * La clave puede venir de dos sitios:
+ *  1. `.env.local` en la raíz del proyecto (VITE_API_KEY). Se compila dentro de
+ *     `jugar.html`, así que la partida arranca sin tener que escribir nada.
+ *     Ese fichero NO se sube al repositorio.
+ *  2. Lo que el jugador escriba en Ajustes, que manda sobre lo anterior y vive
+ *     en su localStorage.
+ *
+ * El repositorio es público: si la clave se commitea, GitHub la detecta y el
+ * proveedor la revoca automáticamente. Por eso va por `.env.local`.
  */
+
+/** Valores integrados en la compilación. Vacíos si no hay `.env.local`. */
+const BUILT_IN = {
+  apiKey: (import.meta.env.VITE_API_KEY ?? '').trim(),
+  provider: (import.meta.env.VITE_API_PROVIDER ?? '').trim(),
+  baseUrl: (import.meta.env.VITE_API_BASE_URL ?? '').trim(),
+  model: (import.meta.env.VITE_API_MODEL ?? '').trim(),
+};
+
+/** ¿La compilación trae clave propia? Lo usa la interfaz para no dar la lata. */
+export const HAS_BUILT_IN_KEY = BUILT_IN.apiKey.length > 0;
 export interface Settings {
   provider: string;
   baseUrl: string;
@@ -77,10 +96,10 @@ export const PROVIDERS: ProviderPreset[] = [
 const KEY = 'ultimo-relato:settings';
 
 export const DEFAULT_SETTINGS: Settings = {
-  provider: 'groq',
-  baseUrl: PROVIDERS[0].baseUrl,
-  apiKey: '',
-  model: PROVIDERS[0].models[0],
+  provider: BUILT_IN.provider || 'groq',
+  baseUrl: BUILT_IN.baseUrl || PROVIDERS[0].baseUrl,
+  apiKey: BUILT_IN.apiKey,
+  model: BUILT_IN.model || PROVIDERS[0].models[0],
   images: true,
   styleRewrite: true,
   music: false,
@@ -92,7 +111,11 @@ export function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return { ...DEFAULT_SETTINGS };
-    return { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<Settings>) };
+    const saved = JSON.parse(raw) as Partial<Settings>;
+    const merged = { ...DEFAULT_SETTINGS, ...saved };
+    // Si el jugador nunca puso clave propia, se usa la de la compilación.
+    if (!saved.apiKey?.trim() && BUILT_IN.apiKey) merged.apiKey = BUILT_IN.apiKey;
+    return merged;
   } catch {
     return { ...DEFAULT_SETTINGS };
   }

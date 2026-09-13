@@ -42,6 +42,7 @@ export const initialState: GameState = {
   location: 'Inicio',
   inventory: [],
   knownRecipes: [],
+  customItems: {},
   log: [],
   history: [],
   diary: [],
@@ -61,3 +62,5 @@ export const initialState: GameState = {
 export const MAX_LOG = 220;
 export const MAX_HISTORY = 24;
 export const MAX_PHOTOS = 60;
+/** Tope de objetos improvisados guardados, para que la partida no engorde. */
+export const MAX_CUSTOM_ITEMS = 160;

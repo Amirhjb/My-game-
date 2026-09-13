@@ -6,3 +6,8 @@ dist-single/
 .vite/
 *.tsbuildinfo
 tsconfig.tsbuildinfo
+
+# La clave de API vive aquí y no se sube nunca
+.env
+.env.local
+.env.*.local

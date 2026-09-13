@@ -1,6 +1,6 @@
 import { GENRES } from '../data/genres';
 import { WEATHER } from '../data/conditions';
-import { getItem } from '../data/items';
+import { getItem, type ItemCatalog } from '../data/items';
 import { clamp } from './rules';
 import type {
   GameState, GenreId, MapState, Mood, Stack, WeatherId, WeatherState, ZoneNode, ZoneType,
@@ -76,8 +76,8 @@ export interface WeatherImpact {
   modifier: { id: string; label: string; skills: Record<string, number>; turns: number } | null;
 }
 
-const ELECTRONIC = (name: string) => getItem(name).tags.includes('electronic');
-const WARM = (name: string) => getItem(name).tags.includes('warm');
+const ELECTRONIC = (name: string, c?: ItemCatalog) => getItem(name, c).tags.includes('electronic');
+const WARM = (name: string, c?: ItemCatalog) => getItem(name, c).tags.includes('warm');
 
 /**
  * Efectos del clima sobre el personaje. Puro: devuelve deltas, no los aplica.
@@ -85,7 +85,7 @@ const WARM = (name: string) => getItem(name).tags.includes('warm');
  */
 export function weatherImpact(
   weather: WeatherState, sheltered: boolean, inventory: Stack[], minutes: number,
-  traits: string[], rng: () => number,
+  traits: string[], rng: () => number, catalog?: ItemCatalog,
 ): WeatherImpact {
   const out: WeatherImpact = { hp: 0, needs: {}, lose: [], messages: [], modifier: null };
   const def = WEATHER[weather.id];
@@ -109,7 +109,7 @@ export function weatherImpact(
     case 'acid_rain': {
       out.hp -= Math.round(7 * scale);
       out.messages.push('La lluvia corrosiva te abrasa la piel expuesta. Busca techo.');
-      const clothes = inventory.filter((s) => getItem(s.name).tags.includes('clothing'));
+      const clothes = inventory.filter((s) => getItem(s.name, catalog).tags.includes('clothing'));
       if (clothes.length && rng() < 0.35) {
         const victim = clothes[Math.floor(rng() * clothes.length)];
         out.lose.push({ name: victim.name, qty: 1 });
@@ -143,7 +143,7 @@ export function weatherImpact(
       break;
     }
     case 'electric': {
-      const gear = inventory.filter((s) => ELECTRONIC(s.name));
+      const gear = inventory.filter((s) => ELECTRONIC(s.name, catalog));
       if (gear.length && rng() < 0.4) {
         const victim = gear[Math.floor(rng() * gear.length)];
         out.lose.push({ name: victim.name, qty: 1 });
@@ -155,7 +155,7 @@ export function weatherImpact(
       break;
     }
     case 'blizzard': {
-      const warm = inventory.some((s) => WARM(s.name));
+      const warm = inventory.some((s) => WARM(s.name, catalog));
       const friolero = traits.includes('friolero');
       const mult = (warm ? 0.4 : 1) * (friolero ? 2 : 1);
       out.hp -= Math.round(6 * scale * mult);
