@@ -1,4 +1,5 @@
 import { initialState, SAVE_VERSION } from '../engine/state';
+import { relaxLayout } from '../engine/world';
 import { pruneImages } from './imageStore';
 import type { GameState } from '../engine/types';
 
@@ -44,7 +45,11 @@ function migrate(raw: unknown): GameState | null {
     stats: { ...initialState.stats, ...(s.stats ?? {}) },
     needs: { ...initialState.needs, ...(s.needs ?? {}) },
     base: { ...initialState.base, ...(s.base ?? {}) },
-    map: s.map?.nodes ? s.map : initialState.map,
+    // Las partidas viejas traen las posiciones del trazado anterior, que se
+    // desparramaba. Se recolocan una vez al cargar.
+    map: s.map?.nodes
+      ? { ...s.map, nodes: relaxLayout(s.map.nodes) }
+      : initialState.map,
     injuries: (s.injuries ?? []).map((i) => ({ ...i, age: i.age ?? 0 })),
     diseases: (s.diseases ?? []).map((d) => ({ ...d, ticks: d.ticks ?? 0 })),
     log: s.log ?? [],

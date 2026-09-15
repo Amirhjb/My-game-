@@ -174,26 +174,136 @@ export function weatherImpact(
 // ─────────────────────────────────────────────────────────────────────────────
 // Mapa
 // ─────────────────────────────────────────────────────────────────────────────
-const NODE_RADIUS = 140;
-const MIN_GAP = 96;
+const IDEAL_EDGE = 130;   // distancia que intentan mantener dos zonas conectadas
+const MIN_GAP = 88;       // a menos de esto, dos nodos se empujan
+const CENTER = { x: 400, y: 300 };
+const GRAVITY = 0.035;    // mantiene compacto el mapa en recorridos largos
 
-/** Coloca un nodo nuevo cerca de su padre sin solaparse con los existentes. */
-function placeNode(nodes: Record<string, ZoneNode>, parent: ZoneNode | undefined, rng: () => number) {
-  const baseX = parent?.x ?? 400;
-  const baseY = parent?.y ?? 300;
-  let best = { x: baseX + NODE_RADIUS, y: baseY, score: -Infinity };
-  for (let i = 0; i < 24; i++) {
-    const angle = rng() * Math.PI * 2;
-    const dist = NODE_RADIUS * (0.8 + rng() * 0.5);
-    const x = baseX + Math.cos(angle) * dist;
-    const y = baseY + Math.sin(angle) * dist;
-    const nearest = Object.values(nodes).reduce(
-      (min, n) => Math.min(min, Math.hypot(n.x - x, n.y - y)), Infinity,
-    );
-    if (nearest > MIN_GAP) return { x, y };
-    if (nearest > best.score) best = { x, y, score: nearest };
+/**
+ * Coloca los nodos con un relajado de fuerzas: las zonas conectadas se atraen
+ * hasta una distancia cómoda y todas se repelen entre sí.
+ *
+ * Antes cada zona nueva se ponía a 140 px del padre en una dirección al azar.
+ * Eso es un paseo aleatorio: a las veinte zonas el mapa medía 800×1300 px,
+ * salía de la ventana y formaba cadenas en lugar de un mapa.
+ *
+ * Es determinista: mismas posiciones de entrada, mismas de salida.
+ */
+export function relaxLayout(
+  nodes: Record<string, ZoneNode>, iterations = 90,
+): Record<string, ZoneNode> {
+  const names = Object.keys(nodes);
+  if (names.length < 2) return nodes;
+
+  const pos = names.map((n) => ({ x: nodes[n].x, y: nodes[n].y }));
+  const index = new Map(names.map((n, i) => [n, i]));
+
+  // Aristas únicas, en índices.
+  const edges: [number, number][] = [];
+  const seen = new Set<string>();
+  names.forEach((name, i) => {
+    for (const conn of nodes[name].connections) {
+      const j = index.get(conn);
+      if (j === undefined || j === i) continue;
+      const key = i < j ? `${i}-${j}` : `${j}-${i}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      edges.push([i, j]);
+    }
+  });
+
+  const n = names.length;
+  const fx = new Float64Array(n);
+  const fy = new Float64Array(n);
+
+  for (let it = 0; it < iterations; it++) {
+    // El enfriamiento evita que los últimos pasos deshagan lo ya colocado.
+    const cool = 1 - it / iterations;
+    fx.fill(0); fy.fill(0);
+
+    // Repulsión entre todos los pares cercanos.
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        let dx = pos[i].x - pos[j].x;
+        let dy = pos[i].y - pos[j].y;
+        let d = Math.hypot(dx, dy);
+        if (d > MIN_GAP * 3) continue;
+        if (d < 0.01) {
+          // Nodos exactamente encima: los separamos de forma determinista.
+          dx = ((i * 37 + j * 11) % 17) - 8;
+          dy = ((i * 13 + j * 29) % 17) - 8;
+          d = Math.hypot(dx, dy) || 1;
+        }
+        const force = (MIN_GAP * 2.2 - Math.min(d, MIN_GAP * 2.2)) / d * 0.5;
+        fx[i] += dx * force; fy[i] += dy * force;
+        fx[j] -= dx * force; fy[j] -= dy * force;
+      }
+    }
+
+    // Gravedad hacia el centro de masas. Sin ella, un recorrido largo en cadena
+    // se estira en línea recta y el mapa acaba midiendo miles de píxeles; con
+    // ella la cadena se enrolla y cabe en la ventana.
+    let gx = 0, gy = 0;
+    for (const p of pos) { gx += p.x; gy += p.y; }
+    gx /= n; gy /= n;
+    for (let i = 0; i < n; i++) {
+      fx[i] += (gx - pos[i].x) * GRAVITY;
+      fy[i] += (gy - pos[i].y) * GRAVITY;
+    }
+
+    // Atracción a lo largo de las conexiones.
+    for (const [i, j] of edges) {
+      const dx = pos[j].x - pos[i].x;
+      const dy = pos[j].y - pos[i].y;
+      const d = Math.hypot(dx, dy) || 1;
+      const force = (d - IDEAL_EDGE) / d * 0.12;
+      fx[i] += dx * force; fy[i] += dy * force;
+      fx[j] -= dx * force; fy[j] -= dy * force;
+    }
+
+    const step = 0.85 * cool;
+    for (let i = 0; i < n; i++) {
+      pos[i].x += Math.max(-24, Math.min(24, fx[i])) * step;
+      pos[i].y += Math.max(-24, Math.min(24, fy[i])) * step;
+    }
   }
-  return { x: best.x, y: best.y };
+
+  // Recentramos para que el mapa no se vaya derivando partida tras partida.
+  let cx = 0, cy = 0;
+  for (const p of pos) { cx += p.x; cy += p.y; }
+  cx = cx / n - CENTER.x;
+  cy = cy / n - CENTER.y;
+
+  const out: Record<string, ZoneNode> = {};
+  names.forEach((name, i) => {
+    out[name] = {
+      ...nodes[name],
+      x: Math.round((pos[i].x - cx) * 10) / 10,
+      y: Math.round((pos[i].y - cy) * 10) / 10,
+    };
+  });
+  return out;
+}
+
+/** Punto de partida para un nodo nuevo, cerca de su vecino conocido. */
+function seedPosition(
+  nodes: Record<string, ZoneNode>, parent: ZoneNode | undefined, rng: () => number,
+) {
+  const baseX = parent?.x ?? CENTER.x;
+  const baseY = parent?.y ?? CENTER.y;
+  // Lo colocamos alejándose del centro de masas para no meterlo en el montón.
+  const all = Object.values(nodes);
+  let cx = CENTER.x, cy = CENTER.y;
+  if (all.length) {
+    cx = all.reduce((s, v) => s + v.x, 0) / all.length;
+    cy = all.reduce((s, v) => s + v.y, 0) / all.length;
+  }
+  const away = Math.atan2(baseY - cy, baseX - cx);
+  const angle = away + (rng() - 0.5) * Math.PI * 1.1;
+  return {
+    x: baseX + Math.cos(angle) * IDEAL_EDGE,
+    y: baseY + Math.sin(angle) * IDEAL_EDGE,
+  };
 }
 
 export interface MapUpdate {
@@ -212,10 +322,12 @@ export function applyMapUpdate(
   const discovered: string[] = [];
   const zone = upd.currentZone.trim() || map.currentZone || 'Inicio';
 
+  let added = false;
   if (!nodes[zone]) {
-    const { x, y } = placeNode(nodes, nodes[map.currentZone], rng);
+    const { x, y } = seedPosition(nodes, nodes[map.currentZone], rng);
     nodes[zone] = { type: upd.type, danger: clamp(upd.danger, 1, 5), visited: true, x, y, connections: [], discoveredDay: day };
     discovered.push(zone);
+    added = true;
   } else {
     if (!nodes[zone].visited) discovered.push(zone);
     nodes[zone] = {
@@ -238,15 +350,18 @@ export function applyMapUpdate(
     const conn = raw.trim();
     if (!conn || conn === zone) continue;
     if (!nodes[conn]) {
-      const { x, y } = placeNode(nodes, nodes[zone], rng);
+      const { x, y } = seedPosition(nodes, nodes[zone], rng);
       nodes[conn] = { type: 'unknown', danger: 0, visited: false, x, y, connections: [zone] };
+      added = true;
     } else if (!nodes[conn].connections.includes(zone)) {
       nodes[conn].connections.push(zone);
     }
     if (!nodes[zone].connections.includes(conn)) nodes[zone].connections.push(conn);
   }
 
-  return { map: { nodes, currentZone: zone }, discovered };
+  // Solo reordenamos cuando hay algo nuevo: así el mapa no baila en cada turno.
+  const laid = added ? relaxLayout(nodes) : nodes;
+  return { map: { nodes: laid, currentZone: zone }, discovered };
 }
 
 export function currentNode(map: MapState): ZoneNode | undefined {

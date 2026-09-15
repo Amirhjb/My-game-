@@ -66,6 +66,7 @@ Proveedores soportados (cualquiera compatible con la API de OpenAI):
 | Proveedor | Coste | Notas |
 |---|---|---|
 | **Groq** | Capa gratuita | Muy rápido. La opción recomendada. |
+| **Google Gemini** | Capa gratuita | Contexto muy largo y buena prosa en español. Clave en [aistudio.google.com](https://aistudio.google.com/apikey). |
 | OpenAI | De pago | La mejor prosa. |
 | OpenRouter | Mixto | Muchos modelos, algunos gratuitos. |
 | Ollama | Gratis | Local, sin clave. Arráncalo con `OLLAMA_ORIGINS=* ollama serve` para que el navegador pueda llamarlo. |
@@ -117,7 +118,9 @@ interfaz, que deriva de un único tono OKLCH por género.
   alguien que te lo explica, probar hasta que sale.
 - **Refugio** con 7 construcciones: camastro, almacén, huerto, recogida de agua, taller,
   muro y generador. Producen recursos mientras estás fuera; sin muro, te lo saquean.
-- **Mapa procedural** navegable con zonas conectadas, tipos y nivel de peligro.
+- **Mapa procedural** navegable con zonas conectadas, tipos y nivel de peligro. El trazado
+  es un relajado de fuerzas: las zonas conectadas se atraen, todas se repelen y una gravedad
+  suave mantiene el conjunto compacto, así que sigue cabiendo en pantalla con 60 zonas.
 - **Diario** que tu personaje escribe al dormir, y **álbum** de fotos con pie de foto escrito
   en primera persona.
 - **Ambiente sonoro procedural** que sigue la tensión de la escena. Sin ficheros de audio:

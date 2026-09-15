@@ -424,6 +424,10 @@
   padding: 5px 9px; border-radius: var(--r-xs);
 }
 .mapview__zoom { position: absolute; right: 12px; bottom: 12px; z-index: 2; display: flex; gap: 5px; }
+/* Con la pantalla estrecha los botones se comen la línea de ayuda. */
+@media (max-width: 560px) {
+  .mapview__hint { display: none; }
+}
 
 /* --- Fichas del álbum --- */
 .album { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 18px; }

@@ -67,6 +67,16 @@ export const PROVIDERS: ProviderPreset[] = [
     hint: 'Calidad narrativa alta. Es de pago por uso.',
   },
   {
+    id: 'gemini',
+    label: 'Google Gemini',
+    // Google expone una capa compatible con OpenAI, así que sirve el mismo cliente.
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    models: ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.5-pro'],
+    needsKey: true,
+    keyUrl: 'https://aistudio.google.com/apikey',
+    hint: 'Capa gratuita amplia y contexto muy largo. Buena prosa en español.',
+  },
+  {
     id: 'openrouter',
     label: 'OpenRouter',
     baseUrl: 'https://openrouter.ai/api/v1',

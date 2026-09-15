@@ -5,7 +5,7 @@ import { parseTurn, parseImprovise, matchItemName, extractJson, asNewItems } fro
 import { estimateItem, getItem, itemsForMaterial } from '../src/data/items';
 import { planCraft, resolveCraft } from '../src/engine/crafting';
 import { tickNeeds, capacityOf, addItems, removeItems } from '../src/engine/rules';
-import { advanceWeather, applyMapUpdate, rollWeather } from '../src/engine/world';
+import { advanceWeather, applyMapUpdate, relaxLayout, rollWeather } from '../src/engine/world';
 import type { GameState, TurnResult } from '../src/engine/types';
 
 let pass = 0;
@@ -323,6 +323,70 @@ function newRun(): GameState {
   for (let i = 0; i < 300; i++) s = reducer(s, { type: 'log', kind: 'system', text: `linea ${i}` });
   check('el registro se recorta', s.log.length <= 220, `${s.log.length}`);
   check('se conservan las últimas líneas', s.log[s.log.length - 1].text === 'linea 299');
+}
+
+// ── Trazado del mapa ────────────────────────────────────────────────────────
+{
+  // Un recorrido largo: antes esto generaba un paseo aleatorio de 800×1300 px
+  // que no cabía en la ventana y formaba cadenas en vez de un mapa.
+  let map = { nodes: { Inicio: { type: 'urban' as const, danger: 1, visited: true, x: 400, y: 300, connections: [] } }, currentZone: 'Inicio' };
+  const rng = seeded(4242);
+  for (let i = 0; i < 24; i++) {
+    map = applyMapUpdate(map, {
+      currentZone: `Zona ${i}`, type: 'urban', danger: 2,
+      connections: i % 4 === 0 ? [`Vecina ${i}`] : [],
+    }, 1, rng).map;
+  }
+
+  const pos = Object.values(map.nodes);
+  const xs = pos.map((n) => n.x), ys = pos.map((n) => n.y);
+  const ancho = Math.max(...xs) - Math.min(...xs);
+  const alto = Math.max(...ys) - Math.min(...ys);
+
+  check('el mapa no se desparrama', ancho < 1700 && alto < 1700, `${Math.round(ancho)}×${Math.round(alto)}`);
+  // Una ventana de mapa es apaisada: el trazado debe acercarse a esa forma.
+  const proporcion = ancho / alto;
+  check('el trazado tiende a apaisado', proporcion > 0.6 && proporcion < 3, `${proporcion.toFixed(2)}`);
+
+  let solapados = 0;
+  for (let i = 0; i < pos.length; i++) {
+    for (let j = i + 1; j < pos.length; j++) {
+      if (Math.hypot(pos[i].x - pos[j].x, pos[i].y - pos[j].y) < 45) solapados++;
+    }
+  }
+  check('ningún par de zonas se solapa', solapados === 0, `${solapados} pares`);
+
+  // Las zonas conectadas quedan cerca; las que no, no necesariamente.
+  const conectadas: number[] = [];
+  for (const [name, node] of Object.entries(map.nodes)) {
+    for (const conn of node.connections) {
+      const o = map.nodes[conn];
+      if (o) conectadas.push(Math.hypot(node.x - o.x, node.y - o.y));
+    }
+  }
+  const media = conectadas.reduce((a, b) => a + b, 0) / conectadas.length;
+  check('las zonas conectadas quedan a distancia legible', media > 60 && media < 320, `${Math.round(media)} px`);
+
+  // Determinismo: mismo trazado de entrada, mismo de salida.
+  const a = relaxLayout(map.nodes);
+  const b = relaxLayout(map.nodes);
+  check('el trazado es determinista', JSON.stringify(a) === JSON.stringify(b));
+
+  // Nodos exactamente encima: se separan igualmente.
+  const encimados = relaxLayout({
+    A: { type: 'urban' as const, danger: 1, visited: true, x: 300, y: 300, connections: ['B'] },
+    B: { type: 'urban' as const, danger: 1, visited: true, x: 300, y: 300, connections: ['A'] },
+  });
+  check('dos zonas superpuestas se separan', Math.hypot(encimados.A.x - encimados.B.x, encimados.A.y - encimados.B.y) > 40);
+
+  // No se pierde nada por el camino.
+  check('el trazado conserva todas las zonas', Object.keys(a).length === Object.keys(map.nodes).length);
+  check('el trazado conserva los datos de cada zona', a['Zona 0'].type === map.nodes['Zona 0'].type && a['Zona 0'].visited === map.nodes['Zona 0'].visited);
+  check('el trazado conserva las conexiones', JSON.stringify(a['Zona 0'].connections) === JSON.stringify(map.nodes['Zona 0'].connections));
+
+  // Un solo nodo no revienta.
+  const solo = relaxLayout({ X: { type: 'urban' as const, danger: 1, visited: true, x: 10, y: 10, connections: [] } });
+  check('un mapa de una sola zona no se toca', solo.X.x === 10 && solo.X.y === 10);
 }
 
 // ── Catálogo dinámico: el mundo puede inventar objetos ──────────────────────

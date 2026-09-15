@@ -48,5 +48,7 @@ npm run check    # tipos + pruebas + build — pásalo antes de dar nada por ter
 - Clases de material (lo que permite cinta en vez de pegamento): `MATERIAL_CLASSES` en
   `src/data/items.ts`, resueltas en `src/engine/crafting.ts`
 - Reglas puras: `src/engine/rules.ts`, `world.ts`, `crafting.ts`
+- Trazado del mapa: `relaxLayout` en `src/engine/world.ts` (fuerzas, determinista).
+  La vista (encuadre y zoom anclado) vive aparte, en `src/modals/MapModal.tsx`
 - Prompts y validación: `src/ai/`
 - Interfaz: `src/components/`, `src/modals/`, `src/screens/`

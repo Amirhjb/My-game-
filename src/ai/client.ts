@@ -23,7 +23,9 @@ export interface ChatOptions {
 
 function friendly(status: number, body: string): AiError {
   const snippet = body.slice(0, 300);
-  if (status === 401 || status === 403) {
+  // Gemini devuelve 400 con «API key not valid» donde otros devuelven 401.
+  const looksLikeBadKey = /api[_ ]?key|credential|unauthenticated|permission denied/i.test(body);
+  if (status === 401 || status === 403 || (status === 400 && looksLikeBadKey)) {
     return new AiError('La clave de API no es válida o no tiene permisos. Revísala en Ajustes.', 'auth');
   }
   if (status === 429) {
@@ -74,8 +76,10 @@ export async function chat(settings: Settings, messages: ChatMessage[], opts: Ch
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      // Algunos modelos rechazan response_format; reintentamos sin él.
-      if (opts.json && (res.status === 400 || res.status === 422)) {
+      // Algunos modelos rechazan response_format; reintentamos sin él. No lo
+      // hacemos si el 400 es en realidad una clave mal puesta.
+      const badKey = /api[_ ]?key|credential|unauthenticated|permission denied/i.test(text);
+      if (opts.json && !badKey && (res.status === 400 || res.status === 422)) {
         return chat(settings, messages, { ...opts, json: false });
       }
       throw friendly(res.status, text);
