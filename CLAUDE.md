@@ -42,6 +42,10 @@ npm run check    # tipos + pruebas + build — pásalo antes de dar nada por ter
 
 7. **Texto en español**, incluidos comentarios y mensajes de commit.
 
+8. **No escribas listas de modelos a mano como fuente de verdad.** Los proveedores los
+   retiran. `listModels()` en `src/ai/client.ts` pregunta al propio proveedor; lo del código
+   son solo valores iniciales.
+
 ## Dónde está cada cosa
 - Contenido (objetos, arquetipos, rasgos, recetas, climas): `src/data/`
 - Catálogo dinámico: `state.customItems` + `getItem(name, catalogo)` en `src/data/items.ts`

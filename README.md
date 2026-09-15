@@ -72,6 +72,10 @@ Proveedores soportados (cualquiera compatible con la API de OpenAI):
 | Ollama | Gratis | Local, sin clave. Arráncalo con `OLLAMA_ORIGINS=* ollama serve` para que el navegador pueda llamarlo. |
 | Otro | — | Cualquier endpoint con `/chat/completions`. |
 
+Los proveedores retiran modelos cada pocos meses, así que la lista escrita en el código
+envejece. El botón **Cargar modelos** de Ajustes le pregunta al proveedor qué admite tu clave
+ahora mismo y te deja elegir; si el modelo guardado ya no existe, lo sustituye solo.
+
 Las ilustraciones usan [Pollinations](https://pollinations.ai), que no necesita clave.
 Se pueden desactivar en Ajustes.
 

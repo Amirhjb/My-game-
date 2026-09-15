@@ -32,7 +32,15 @@ function friendly(status: number, body: string): AiError {
     return new AiError('Has alcanzado el límite de peticiones del proveedor. Espera un momento y reintenta.', 'rate');
   }
   if (status === 404) {
-    return new AiError(`El modelo o la URL no existen en este proveedor. Revísalos en Ajustes. (${snippet})`, 'config');
+    // Cuando un proveedor retira un modelo, el propio mensaje suele nombrar el
+    // recambio. Lo extraemos para no obligar a leerse el JSON entero.
+    const sugerido = body.match(/use\s+(?:models\/)?([\w.-]*(?:gpt|gemini|llama|claude|qwen|mistral)[\w.-]*)/i)?.[1];
+    return new AiError(
+      sugerido
+        ? `Ese modelo ya no existe en este proveedor. El propio proveedor sugiere usar «${sugerido}». Cámbialo en Ajustes o pulsa «Cargar modelos».`
+        : `El modelo o la URL no existen en este proveedor. Revísalos en Ajustes. (${snippet})`,
+      'config',
+    );
   }
   if (status >= 500) {
     return new AiError('El proveedor está fallando ahora mismo. Reintenta en unos segundos.', 'server');
@@ -104,6 +112,40 @@ export async function chat(settings: Settings, messages: ChatMessage[], opts: Ch
     clearTimeout(timeout);
     opts.signal?.removeEventListener('abort', onAbort);
   }
+}
+
+/**
+ * Pide al proveedor qué modelos tiene disponibles esa clave.
+ * Cualquier endpoint compatible con OpenAI expone GET /models, así que sirve
+ * igual para Groq, OpenAI, OpenRouter, Gemini u Ollama. Es la forma de que la
+ * lista no se quede obsoleta cada vez que un proveedor retira un modelo.
+ */
+export async function listModels(settings: Settings, signal?: AbortSignal): Promise<string[]> {
+  const preset = providerOf(settings.provider);
+  const base = settings.baseUrl.trim().replace(/\/+$/, '');
+  if (!base) throw new AiError('Falta la URL del proveedor.', 'config');
+  if (preset.needsKey && !settings.apiKey.trim()) {
+    throw new AiError('Añade la clave de API antes de pedir la lista de modelos.', 'config');
+  }
+
+  const headers: Record<string, string> = {};
+  if (settings.apiKey.trim()) headers.Authorization = `Bearer ${settings.apiKey.trim()}`;
+
+  let res: Response;
+  try {
+    res = await fetch(`${base}/models`, { headers, signal });
+  } catch {
+    throw new AiError('No se ha podido contactar con el proveedor.', 'network');
+  }
+  if (!res.ok) throw friendly(res.status, await res.text().catch(() => ''));
+
+  const data = (await res.json()) as { data?: { id?: string }[]; models?: { name?: string }[] };
+  const ids = (data.data ?? [])
+    .map((m) => m.id)
+    .filter((id): id is string => typeof id === 'string' && id.length > 0);
+
+  if (ids.length) return ids.sort();
+  throw new AiError('El proveedor no ha devuelto ningún modelo.', 'empty');
 }
 
 /** Comprobación rápida de configuración, para el botón "Probar conexión". */

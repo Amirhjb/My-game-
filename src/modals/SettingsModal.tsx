@@ -1,17 +1,44 @@
 import { useState } from 'react';
 import { NARRATOR_LIST } from '../data/conditions';
-import { testConnection } from '../ai/client';
+import { listModels, testConnection } from '../ai/client';
 import { HAS_BUILT_IN_KEY, PROVIDERS, providerOf } from '../persistence/settings';
 import { Modal } from '../components/ui';
 import type { GameApi } from '../hooks/useGame';
 
 type TestState = { kind: 'idle' | 'busy' | 'ok' | 'fail'; message?: string };
+type ModelsState = { kind: 'idle' | 'busy' | 'ok' | 'fail'; list: string[]; message?: string };
 
 export function SettingsModal({ api, onClose }: { api: GameApi; onClose: () => void }) {
   const { settings, updateSettings, state, dispatch } = api;
   const preset = providerOf(settings.provider);
   const [showKey, setShowKey] = useState(false);
   const [test, setTest] = useState<TestState>({ kind: 'idle' });
+  const [models, setModels] = useState<ModelsState>({ kind: 'idle', list: [] });
+
+  // Los modelos que ofrece el proveedor mandan sobre la lista escrita en el código.
+  const modelOptions = models.list.length ? models.list : preset.models;
+
+  const loadModels = async () => {
+    setModels({ kind: 'busy', list: models.list });
+    try {
+      const list = await listModels(settings);
+      setModels({ kind: 'ok', list, message: `${list.length} modelos disponibles` });
+      // Si el modelo elegido ya no existe, elegimos uno sensato: primero el que
+      // recomendamos por defecto, y si tampoco está, el mejor que no sea una
+      // variante recortada (lite/mini/nano), no el primero por orden alfabético.
+      if (!list.includes(settings.model)) {
+        const recomendado = preset.models.find((m) => list.includes(m));
+        const completo = list.find((m) => !/lite|mini|nano|embed|tts|image/i.test(m));
+        const elegido = recomendado ?? completo ?? list[0];
+        if (elegido) {
+          updateSettings({ model: elegido });
+          setTest({ kind: 'idle' });
+        }
+      }
+    } catch (err) {
+      setModels({ kind: 'fail', list: [], message: err instanceof Error ? err.message : 'Error desconocido.' });
+    }
+  };
 
   const runTest = async () => {
     setTest({ kind: 'busy' });
@@ -40,6 +67,7 @@ export function SettingsModal({ api, onClose }: { api: GameApi; onClose: () => v
               style={{ padding: '11px 13px', gap: 4 }}
               onClick={() => {
                 setTest({ kind: 'idle' });
+                setModels({ kind: 'idle', list: [] });
                 updateSettings({
                   provider: p.id,
                   baseUrl: p.baseUrl || settings.baseUrl,
@@ -65,14 +93,44 @@ export function SettingsModal({ api, onClose }: { api: GameApi; onClose: () => v
           </div>
           <div>
             <label className="u-eyebrow" style={label} htmlFor="model">Modelo</label>
-            <input
-              id="model" className="field" spellCheck={false} autoComplete="off" list="model-options"
-              value={settings.model}
-              onChange={(e) => updateSettings({ model: e.target.value })}
-            />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                id="model" className="field" style={{ flex: 1 }} spellCheck={false} autoComplete="off" list="model-options"
+                value={settings.model}
+                onChange={(e) => { setTest({ kind: 'idle' }); updateSettings({ model: e.target.value }); }}
+              />
+              <button
+                className="btn"
+                onClick={() => void loadModels()}
+                disabled={models.kind === 'busy'}
+                title="Preguntar al proveedor qué modelos admite tu clave"
+              >
+                {models.kind === 'busy' ? '…' : 'Cargar'}
+              </button>
+            </div>
             <datalist id="model-options">
-              {preset.models.map((m) => <option key={m} value={m} />)}
+              {modelOptions.map((m) => <option key={m} value={m} />)}
             </datalist>
+            {models.kind === 'ok' && (
+              <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 5, maxHeight: 96, overflowY: 'auto' }}>
+                {modelOptions.slice(0, 40).map((m) => (
+                  <button
+                    key={m}
+                    className={`chip ${m === settings.model ? 'chip--accent' : ''}`}
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => { setTest({ kind: 'idle' }); updateSettings({ model: m }); }}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            )}
+            {models.kind === 'fail' && (
+              <p style={{ fontSize: 11.5, color: 'var(--bad)', marginTop: 7, lineHeight: 1.5 }}>{models.message}</p>
+            )}
+            {models.kind === 'ok' && (
+              <p style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 7 }}>{models.message}</p>
+            )}
           </div>
         </div>
 
@@ -85,7 +143,11 @@ export function SettingsModal({ api, onClose }: { api: GameApi; onClose: () => v
                 type={showKey ? 'text' : 'password'} spellCheck={false} autoComplete="off"
                 placeholder="Pega aquí tu clave"
                 value={settings.apiKey}
-                onChange={(e) => { setTest({ kind: 'idle' }); updateSettings({ apiKey: e.target.value.trim() }); }}
+                onChange={(e) => {
+                  setTest({ kind: 'idle' });
+                  setModels({ kind: 'idle', list: [] });
+                  updateSettings({ apiKey: e.target.value.trim() });
+                }}
               />
               <button className="btn" onClick={() => setShowKey((v) => !v)} aria-label={showKey ? 'Ocultar clave' : 'Mostrar clave'}>
                 {showKey ? '🙈' : '👁'}
@@ -108,6 +170,9 @@ export function SettingsModal({ api, onClose }: { api: GameApi; onClose: () => v
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <button className="btn btn--sm" onClick={runTest} disabled={test.kind === 'busy'}>
             {test.kind === 'busy' ? 'Probando…' : 'Probar conexión'}
+          </button>
+          <button className="btn btn--sm" onClick={() => void loadModels()} disabled={models.kind === 'busy'}>
+            {models.kind === 'busy' ? 'Cargando…' : 'Cargar modelos'}
           </button>
           {test.kind === 'ok' && <span style={{ fontSize: 12, color: 'var(--ok)' }}>✓ Funciona. {test.message}</span>}
           {test.kind === 'fail' && <span style={{ fontSize: 12, color: 'var(--bad)' }}>✕ {test.message}</span>}

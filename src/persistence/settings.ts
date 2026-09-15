@@ -71,7 +71,9 @@ export const PROVIDERS: ProviderPreset[] = [
     label: 'Google Gemini',
     // Google expone una capa compatible con OpenAI, así que sirve el mismo cliente.
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    models: ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.5-pro'],
+    // Google retira modelos con bastante alegría: usa «Cargar modelos» en
+    // Ajustes para ver los que tu clave tiene disponibles ahora mismo.
+    models: ['gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.5-flash-lite'],
     needsKey: true,
     keyUrl: 'https://aistudio.google.com/apikey',
     hint: 'Capa gratuita amplia y contexto muy largo. Buena prosa en español.',
