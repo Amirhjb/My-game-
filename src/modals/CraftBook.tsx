@@ -148,8 +148,8 @@ export function CraftBook({ api, onClose }: { api: GameApi; onClose: () => void 
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
                 <span className="chip chip--accent">→ {p.recipe.result.name} ×{p.recipe.result.qty}</span>
                 {p.recipe.skillReq && (
-                  <span className={`chip ${p.hasSkill ? '' : 'chip--neg'}`}>
-                    {p.recipe.skillReq.skill} {p.skillLevel}/{p.recipe.skillReq.level}
+                  <span className={`chip ${p.hasSkill ? 'chip--pos' : 'chip--neg'}`}>
+                    {p.recipe.skillReq.skill} {p.recipe.skillReq.level} · tienes {p.skillLevel}
                   </span>
                 )}
                 {p.failChance > 0 && (

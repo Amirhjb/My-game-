@@ -35,6 +35,8 @@ export interface ItemDef {
   kg: number;
   l: number;
   tags: string[];
+  /** Fuentes donde el jugador puede conseguirlo. Vacío = objeto huérfano. */
+  sources?: string[];
   /** Descripción corta, sobre todo para los objetos improvisados. */
   desc?: string;
   /**
@@ -57,8 +59,13 @@ export interface ItemDef {
     sleep?: number;
     hp?: number;
     temp?: number;
-    /** Cura estas enfermedades al consumirlo. */
+    /**
+     * Inicia tratamiento de estas enfermedades: baja un estadio por cada
+     * `DISEASE_TREAT_HOURS` de tratamiento, en vez de curar de golpe.
+     */
     cures?: DiseaseId[];
+    /** Cura del todo al instante. Reservado a curas específicas y caras. */
+    curesNow?: DiseaseId[];
     /** Reduce la gravedad de las lesiones en este valor. */
     healInjury?: number;
     /** Minutos que consume usarlo. */
@@ -80,8 +87,13 @@ export interface Injury {
 export interface ActiveDisease {
   id: DiseaseId;
   stage: 0 | 1 | 2;
-  /** Turnos acumulados en el estadio actual. */
+  /**
+   * Horas de juego acumuladas en el estadio actual. Antes era «turnos», así que
+   * nueve acciones de dos minutos enfermaban más que ocho horas caminando.
+   */
   ticks: number;
+  /** Horas de tratamiento activo. Curarse deja de ser instantáneo. */
+  treated?: number;
 }
 
 export interface Needs {
@@ -136,7 +148,7 @@ export interface Modifier {
 
 export interface LogEntry {
   id: string;
-  kind: 'player' | 'story' | 'system' | 'warn' | 'good' | 'bad';
+  kind: 'player' | 'story' | 'system' | 'warn' | 'good' | 'bad' | 'roll';
   text: string;
   /** Minuto de juego en el que se registró. */
   at: number;
@@ -188,6 +200,12 @@ export interface GameState {
 
   // Estadísticas
   skillXp: Record<string, number>;
+  /**
+   * Penalización permanente por oficio y rasgos, en niveles.
+   * Va aparte de `skillXp` porque antes se sumaba al nivel base y se recortaba
+   * a 1 al instante: las penalizaciones de los catorce oficios no hacían nada.
+   */
+  basePenalty: Record<string, number>;
   hp: number;
   maxHp: number;
   needs: Needs;
@@ -247,6 +265,12 @@ export interface TurnResult {
   mapUpdate: { currentZone: string; type: ZoneType; danger: number; connections: string[] } | null;
   /** Sugerencias de acción contextual redactadas por el narrador. */
   suggestions: string[];
+  /**
+   * ¿El personaje acabó la acción a cubierto? Lo decide el narrador, que es
+   * quien sabe si describió al jugador metiéndose bajo un puente. El motor lo
+   * usa para saber si aplica el daño del clima severo.
+   */
+  sheltered: boolean | null;
   /** Objetos nuevos que el mundo introduce en esta escena. */
   newItems: (ItemDef & { name: string })[];
   /** Recetas que el personaje aprende aquí (de un libro, de alguien, probando). */

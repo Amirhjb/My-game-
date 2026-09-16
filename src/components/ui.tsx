@@ -127,7 +127,7 @@ export function Block({ title, action, children }: { title: string; action?: Rea
   return (
     <section className="block">
       <div className="block__head">
-        <h3 className="block__title">{title}</h3>
+        <h2 className="block__title">{title}</h2>
         {action}
       </div>
       {children}

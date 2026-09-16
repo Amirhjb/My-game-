@@ -91,8 +91,9 @@ export function Intro({ api, onSettings }: { api: GameApi; onSettings: () => voi
           <div className="notice notice--info" style={{ marginBottom: 18 }}>
             <span aria-hidden>🔑</span>
             <div>
-              <b>Falta configurar la IA.</b> El juego necesita un modelo de lenguaje para narrar.
-              Groq tiene una capa gratuita y se configura en menos de un minuto.
+              <b>Antes de jugar hace falta una clave de API.</b> El juego necesita un modelo de
+              lenguaje para narrar. Groq y Gemini tienen capa gratuita y se configuran en menos
+              de un minuto; sin eso la partida no puede arrancar.
               <div style={{ marginTop: 9 }}>
                 <button className="btn btn--sm" onClick={onSettings}>Configurar ahora</button>
               </div>
@@ -107,9 +108,9 @@ export function Intro({ api, onSettings }: { api: GameApi; onSettings: () => voi
 
         <button
           className="btn btn--primary btn--lg btn--block"
-          onClick={() => api.dispatch({ type: 'setScreen', screen: 'genre' })}
+          onClick={() => (api.ready ? api.dispatch({ type: 'setScreen', screen: 'genre' }) : onSettings())}
         >
-          Nueva partida
+          {api.ready ? 'Nueva partida' : 'Configurar la IA y empezar'}
         </button>
 
         <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>

@@ -128,7 +128,8 @@ export interface CraftOutcome {
 
 /** Ejecuta el plan. `rng` se inyecta para poder testear el resultado. */
 export function resolveCraft(plan: CraftPlan, rng: () => number): CraftOutcome {
-  const consumed = plan.resolved.map((r) => r.consume!).filter(Boolean);
+  // Las herramientas hacen falta, pero no se gastan.
+  const consumed = plan.resolved.filter((r) => !r.tool).map((r) => r.consume!).filter(Boolean);
   const subs = plan.resolved.filter((r) => r.usedSub);
   const subNote = subs.length
     ? ` Improvisando con ${subs.map((r) => r.usedSub).join(' y ')} en lugar de ${subs.map((r) => (r.name ?? r.label).toLowerCase()).join(' y ')}.`

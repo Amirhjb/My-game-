@@ -27,6 +27,7 @@ export const initialState: GameState = {
   traits: [],
   narrator: 'cronista',
   skillXp: {},
+  basePenalty: {},
   hp: 100,
   maxHp: 100,
   needs: { ...INITIAL_NEEDS },
@@ -62,5 +63,7 @@ export const initialState: GameState = {
 export const MAX_LOG = 220;
 export const MAX_HISTORY = 24;
 export const MAX_PHOTOS = 60;
+/** El diario crecía sin tope dentro del guardado. */
+export const MAX_DIARY = 60;
 /** Tope de objetos improvisados guardados, para que la partida no engorde. */
 export const MAX_CUSTOM_ITEMS = 160;

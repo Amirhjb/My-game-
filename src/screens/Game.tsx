@@ -18,7 +18,51 @@ import type { GameApi } from '../hooks/useGame';
 
 type PanelId =
   | 'inventory' | 'craft' | 'map' | 'base' | 'diary' | 'album'
-  | 'saves' | 'status' | 'context' | null;
+  | 'saves' | 'status' | 'context' | 'sleep' | null;
+
+/** Dormir de verdad: horas a elegir y el motor resuelve la noche entera. */
+function SleepModal({ api, onClose }: { api: GameApi; onClose: () => void }) {
+  const { state, dispatch } = api;
+  const [horas, setHoras] = useState(8);
+  const enRefugio = state.base.established && state.map.currentZone === state.base.location;
+  const camastro = enRefugio && state.base.structures.includes('cama');
+  const muro = enRefugio && state.base.structures.includes('muro');
+  const peligro = state.map.nodes[state.map.currentZone]?.danger ?? 2;
+
+  return (
+    <Modal title="Dormir" icon="😴" onClose={onClose}>
+      <p style={{ fontSize: 13.5, color: 'var(--text-mid)', lineHeight: 1.7, marginBottom: 18 }}>
+        Dormir recupera sueño de verdad y deja pasar el tiempo: las enfermedades avanzan,
+        las heridas cierran y el clima cambia. Dónde duermas importa.
+      </p>
+
+      <label className="u-eyebrow" htmlFor="horas" style={{ display: 'block', marginBottom: 8 }}>
+        Cuántas horas — {horas}
+      </label>
+      <input
+        id="horas" type="range" min={1} max={12} step={1} value={horas}
+        onChange={(e) => setHoras(Number(e.target.value))}
+        style={{ width: '100%', accentColor: 'var(--accent)', marginBottom: 18 }}
+      />
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 18 }}>
+        <span className={`chip ${camastro ? 'chip--pos' : ''}`}>
+          {camastro ? '🛏️ Camastro: descanso completo' : 'Sin camastro: duermes peor'}
+        </span>
+        <span className={`chip ${muro ? 'chip--pos' : peligro >= 3 ? 'chip--neg' : ''}`}>
+          {muro ? '🧱 El muro te protege' : `Riesgo de la zona: ${peligro}/5`}
+        </span>
+      </div>
+
+      <button
+        className="btn btn--primary btn--block btn--lg"
+        onClick={() => { dispatch({ type: 'sleep', hours: horas }); onClose(); }}
+      >
+        Dormir {horas} {horas === 1 ? 'hora' : 'horas'}
+      </button>
+    </Modal>
+  );
+}
 
 export function Game({ api, onSettings }: { api: GameApi; onSettings: () => void }) {
   const { state, settings, status } = api;
@@ -42,7 +86,7 @@ export function Game({ api, onSettings }: { api: GameApi; onSettings: () => void
       const target = e.target as HTMLElement;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (['INPUT', 'TEXTAREA'].includes(target.tagName) || target.isContentEditable) return;
-      const map: Record<string, PanelId> = { i: 'inventory', c: 'craft', m: 'map', b: 'base', d: 'diary', f: 'album' };
+      const map: Record<string, PanelId> = { i: 'inventory', c: 'craft', m: 'map', b: 'base', d: 'diary', f: 'album', z: 'sleep' };
       const next = map[e.key.toLowerCase()];
       if (next) { e.preventDefault(); setPanel((p) => (p === next ? null : next)); }
     };
@@ -59,6 +103,7 @@ export function Game({ api, onSettings }: { api: GameApi; onSettings: () => void
     { id: 'craft', icon: '🔧', label: 'Fabricar', key: 'C' },
     { id: 'map', icon: '🗺️', label: 'Mapa', key: 'M' },
     { id: 'base', icon: '🏚️', label: 'Refugio', key: 'B' },
+    { id: 'sleep', icon: '😴', label: 'Dormir', key: 'Z' },
     { id: 'diary', icon: '📓', label: 'Diario', key: 'D' },
     { id: 'album', icon: '📷', label: 'Álbum', key: 'F' },
   ];
@@ -66,7 +111,7 @@ export function Game({ api, onSettings }: { api: GameApi; onSettings: () => void
   return (
     <div className="game">
       <header className="topbar">
-        <span className="topbar__brand">Último <b>Relato</b></span>
+        <h1 className="topbar__brand">Último <b>Relato</b></h1>
 
         <div className="topbar__meta">
           {compact && (
@@ -120,7 +165,7 @@ export function Game({ api, onSettings }: { api: GameApi; onSettings: () => void
         <button onClick={() => setPanel('status')}><span aria-hidden>❤</span>Estado</button>
         <button onClick={() => setPanel('inventory')}><span aria-hidden>🎒</span>Mochila</button>
         <button onClick={() => setPanel('map')}><span aria-hidden>🗺️</span>Mapa</button>
-        <button onClick={() => setPanel('craft')}><span aria-hidden>🔧</span>Fabricar</button>
+        <button onClick={() => setPanel('sleep')}><span aria-hidden>😴</span>Dormir</button>
         <button onClick={() => setPanel('context')} data-badge={state.photos.length > 0 || state.diary.length > 0}>
           <span aria-hidden>☰</span>Más
         </button>
@@ -128,7 +173,14 @@ export function Game({ api, onSettings }: { api: GameApi; onSettings: () => void
 
       {panel === 'inventory' && <Inventory api={api} onClose={close} />}
       {panel === 'craft' && <CraftBook api={api} onClose={close} />}
-      {panel === 'map' && <MapModal state={state} onClose={close} />}
+      {panel === 'map' && (
+        <MapModal
+          state={state}
+          onClose={close}
+          onTravel={(zona) => { close(); api.act(`Viajo hasta ${zona}.`); }}
+        />
+      )}
+      {panel === 'sleep' && <SleepModal api={api} onClose={close} />}
       {panel === 'base' && <BaseModal api={api} onClose={close} />}
       {panel === 'diary' && <Diary state={state} onClose={close} />}
       {panel === 'album' && <Album state={state} onClose={close} />}
@@ -147,6 +199,7 @@ export function Game({ api, onSettings }: { api: GameApi; onSettings: () => void
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
             <ContextRail api={api} onOpen={(id) => setPanel(id as PanelId)} />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <button className="btn" onClick={() => setPanel('craft')}>🔧 Fabricar</button>
               <button className="btn" onClick={() => setPanel('diary')}>📓 Diario ({state.diary.length})</button>
               <button className="btn" onClick={() => setPanel('album')}>📷 Álbum ({state.photos.length})</button>
               <button className="btn" onClick={() => setPanel('saves')}>💾 Partidas</button>

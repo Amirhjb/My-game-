@@ -113,7 +113,9 @@ export const DEFAULT_SETTINGS: Settings = {
   apiKey: BUILT_IN.apiKey,
   model: BUILT_IN.model || PROVIDERS[0].models[0],
   images: true,
-  styleRewrite: true,
+  // Desactivada por defecto: el prompt principal ya lleva la voz del narrador,
+  // así que duplicaba las llamadas al proveedor para repetir lo mismo.
+  styleRewrite: false,
   music: false,
   volume: 0.35,
   calm: false,

@@ -6,14 +6,15 @@ import { INJURY_ZONE_IDS, INJURY_ZONES, ALL_SKILLS, XP_TABLE, xpToLevel, makeSki
 import { planCraft, resolveCraft, isAtWorkshop } from './crafting';
 import {
   addItems, capacityOf, clamp, countOf, dayOf, effectiveLevel, healInjuries, maxHpFor,
-  naturalDiseaseRisk, progressDiseases, removeItems, startingSkillLevels, tickModifiers,
-  tickNeeds, upsertModifier,
+  naturalDiseaseRisk, progressDiseases, remitRadiation, removeItems, startingSkills,
+  startTreatment, tickModifiers, tickNeeds, upsertModifier,
 } from './rules';
 import {
-  advanceWeather, applyMapUpdate, buildForecast, currentNode, isSheltered, rollWeather, weatherImpact,
+  advanceWeather, applyMapUpdate, averageDanger, buildForecast, currentNode, graphDistance,
+  isSheltered, rollWeather, weatherImpact,
 } from './world';
 import {
-  MAX_CUSTOM_ITEMS, MAX_HISTORY, MAX_LOG, MAX_PHOTOS, INITIAL_BASE, INITIAL_NEEDS,
+  MAX_CUSTOM_ITEMS, MAX_DIARY, MAX_HISTORY, MAX_LOG, MAX_PHOTOS, INITIAL_BASE, INITIAL_NEEDS,
   initialState, makeEntry, uid,
 } from './state';
 import type {
@@ -31,7 +32,7 @@ export type Action =
   | { type: 'startRun'; rng?: () => number }
   | { type: 'log'; kind: LogEntry['kind']; text: string }
   | { type: 'applyTurn'; playerText: string | null; result: TurnResult; rng?: () => number }
-  | { type: 'useItem'; name: string }
+  | { type: 'useItem'; name: string; rng?: () => number }
   | { type: 'dropItem'; name: string; qty: number }
   | { type: 'craft'; recipeId: string; rng?: () => number }
   | { type: 'improvise'; goal: string; plan: ImprovisePlan; rng?: () => number }
@@ -39,7 +40,8 @@ export type Action =
   | { type: 'learnRecipes'; ids: string[] }
   | { type: 'establishBase' }
   | { type: 'returnToBase'; rng?: () => number }
-  | { type: 'build'; structure: StructureId }
+  | { type: 'sleep'; hours: number; rng?: () => number }
+  | { type: 'build'; structure: StructureId; rng?: () => number }
   | { type: 'deposit'; name: string; qty: number }
   | { type: 'withdraw'; name: string; qty: number }
   | { type: 'setScene'; key: string; description: string }
@@ -66,15 +68,23 @@ function withLog(state: GameState, entries: { kind: LogEntry['kind']; text: stri
   return { ...state, log: pushLog(state, entries) };
 }
 
-/** Aplica XP y devuelve los avisos de subida de nivel. */
+/**
+ * Aplica XP y devuelve los avisos de subida de nivel.
+ *
+ * Hay dos escalas distintas y antes compartían el mismo recorte: lo que reporta
+ * el modelo (0-5) y lo que vale una receta (2-10). Con `clamp(0,6) × 50`, una
+ * receta de 10 valía lo mismo que una de 6 y una trivial tanto como una difícil.
+ */
 function grantXp(
-  skillXp: Record<string, number>, gains: Record<string, number>,
+  skillXp: Record<string, number>, gains: Record<string, number>, escala: 'model' | 'recipe',
 ): { skillXp: Record<string, number>; levelUps: string[] } {
   const out = { ...skillXp };
   const levelUps: string[] = [];
   for (const [skill, raw] of Object.entries(gains)) {
     if (!ALL_SKILLS.includes(skill)) continue;
-    const gain = clamp(Math.round(raw), 0, 6) * 50;
+    const gain = escala === 'model'
+      ? clamp(Math.round(raw), 0, 5) * 50
+      : Math.max(0, Math.round(raw)) * 25;
     if (gain <= 0) continue;
     const before = xpToLevel(out[skill] ?? 0);
     out[skill] = Math.min(XP_TABLE[10], (out[skill] ?? 0) + gain);
@@ -82,6 +92,17 @@ function grantXp(
     if (after > before) levelUps.push(`${skill} → nivel ${after}`);
   }
   return { skillXp: out, levelUps };
+}
+
+/**
+ * Rendimientos decrecientes por repetir la misma receta: a partir del tercer
+ * crafteo seguido vale la mitad. Evita subir a nivel 10 haciendo vendas.
+ */
+function repeatFactor(counters: Record<string, number>, recipeId: string): number {
+  const veces = counters[`craft:${recipeId}`] ?? 0;
+  if (veces < 3) return 1;
+  if (veces < 8) return 0.5;
+  return 0.25;
 }
 
 /**
@@ -115,21 +136,183 @@ function deathCauseFrom(state: GameState): string {
   return 'Heridas';
 }
 
+
+/**
+ * Avanza el mundo N minutos: clima, enfermedades, lesiones, necesidades, daño y
+ * modificadores. Antes cada acción hacía su propia mezcla —`useItem` se saltaba
+ * las enfermedades, `build` ni siquiera miraba si te habías muerto— y ahí se
+ * colaron varios de los fallos de la auditoría.
+ */
+interface WorldOpts {
+  rng: () => number;
+  /** Duerme: el desgaste baja y el sueño no se descuenta. */
+  resting?: boolean;
+  /** Si el narrador ya ha dicho si está a cubierto, manda sobre el tipo de zona. */
+  sheltered?: boolean | null;
+  needsDelta?: { hunger?: number; thirst?: number; sleep?: number; temp?: number };
+  /** Cuenta para los contadores de Adicto y Paranoico. */
+  isAction?: boolean;
+}
+
+function advanceWorld(
+  state: GameState, minutes: number, opts: WorldOpts,
+): { state: GameState; messages: { kind: LogEntry['kind']; text: string }[] } {
+  const { rng } = opts;
+  const msgs: { kind: LogEntry['kind']; text: string }[] = [];
+  const genre = state.genre ?? 'apocalypse';
+  let inventory = state.inventory;
+  let extraHp = 0;
+
+  // 1) Clima.
+  const adv = advanceWeather(state, minutes, genre, rng);
+  if (adv.changed && adv.weather.id !== state.weather.id) {
+    const w = WEATHER[adv.weather.id];
+    msgs.push({ kind: w.severe ? 'warn' : 'system', text: `Cambia el tiempo: ${w.label.toLowerCase()}. ${w.desc}` });
+  }
+  const bajoTecho = opts.sheltered ?? isSheltered(state.map);
+  const impact = weatherImpact(adv.weather, bajoTecho, inventory, minutes, state.traits, rng, state.customItems);
+  if (impact.lose.length) inventory = removeItems(inventory, impact.lose);
+  for (const m of impact.messages) msgs.push({ kind: impact.hp < 0 ? 'bad' : 'system', text: m });
+
+  // 2) Lesiones: curación natural.
+  const healed = healInjuries(state.injuries, minutes, state.traits);
+  for (const m of healed.messages) msgs.push({ kind: 'good', text: m });
+
+  // 3) Enfermedades: progresión, tratamiento, remisión y contagio ambiental.
+  const progressed = progressDiseases(state.diseases, minutes);
+  let diseases = progressed.diseases;
+  for (const m of progressed.messages) msgs.push({ kind: /remite|acabado|bastado|mejora/.test(m) ? 'good' : 'warn', text: m });
+
+  const remitted = remitRadiation(diseases, minutes, rng);
+  diseases = remitted.diseases;
+  for (const m of remitted.messages) msgs.push({ kind: 'good', text: m });
+
+  const risk = naturalDiseaseRisk({ ...state, injuries: healed.injuries, inventory }, minutes, rng);
+  for (const d of risk.add) if (!diseases.some((x) => x.id === d.id)) diseases.push(d);
+  for (const m of risk.messages) msgs.push({ kind: 'bad', text: m });
+
+  // 4) Necesidades y daño acumulado, una sola vez y con todo lo anterior hecho.
+  const tick = tickNeeds(state.needs, minutes, state.traits, diseases, {
+    hunger: (opts.needsDelta?.hunger ?? 0) + (impact.needs.hunger ?? 0),
+    thirst: (opts.needsDelta?.thirst ?? 0) + (impact.needs.thirst ?? 0),
+    sleep: (opts.needsDelta?.sleep ?? 0) + (impact.needs.sleep ?? 0),
+    temp: (opts.needsDelta?.temp ?? 0) + (impact.needs.temp ?? 0),
+  }, { resting: opts.resting });
+  for (const w of tick.warnings) msgs.push({ kind: 'warn', text: w });
+  const needs = { ...tick.needs };
+
+  // 5) Rasgos con efecto periódico.
+  const counters = { ...state.counters };
+  let modifiers = state.modifiers;
+
+  if (opts.isAction && state.traits.includes('adicto')) {
+    counters.adicto = (counters.adicto ?? 0) + 1;
+    if (counters.adicto % 5 === 0) {
+      const dose = inventory.find((s) => s.name === 'Morfina' || s.name === 'Alcohol');
+      if (dose) {
+        inventory = removeItems(inventory, [{ name: dose.name, qty: 1 }]);
+        msgs.push({ kind: 'system', text: `Sientes el tirón. Consumes ${dose.name} y el malestar cede.` });
+      } else {
+        extraHp -= 8;
+        modifiers = upsertModifier(modifiers, {
+          id: 'abstinencia', label: 'Síndrome de abstinencia',
+          skills: { '*': 2 }, turns: 4, kind: 'debuff',
+        });
+        msgs.push({ kind: 'bad', text: 'La abstinencia te sacude: temblores, sudor frío y todo te sale peor durante un rato.' });
+      }
+    }
+  }
+  if (opts.isAction && state.traits.includes('claustrofobico') && bajoTecho) {
+    needs.sleep = clamp(needs.sleep - 7, 0, 100);
+    needs.hunger = clamp(needs.hunger - 4, 0, 100);
+    msgs.push({ kind: 'warn', text: 'Las paredes se te echan encima. La ansiedad te consume más rápido aquí dentro.' });
+  }
+  if (opts.isAction && state.traits.includes('paranoico')) {
+    counters.paranoico = (counters.paranoico ?? 0) + 1;
+    if (counters.paranoico % 5 === 0) {
+      const events = [
+        { text: 'Una sombra en el rabillo del ojo. Juras que alguien te sigue.', sleep: -6, hp: 0 },
+        { text: 'Escuchas pasos que no existen y el corazón se te dispara.', sleep: 0, hp: -4 },
+        { text: 'Convencido de que te han tocado las cosas, revisas el petate tres veces.', sleep: -5, hp: 0 },
+        { text: 'Crees oír voces al otro lado de la pared. Tardas horas en calmarte.', sleep: -5, hp: -3 },
+      ];
+      const ev = events[Math.floor(rng() * events.length)];
+      needs.sleep = clamp(needs.sleep + ev.sleep, 0, 100);
+      extraHp += ev.hp;
+      msgs.push({ kind: 'warn', text: `👁 ${ev.text}` });
+    }
+  }
+
+  // 6) Miedo y temple en zonas peligrosas: Cobarde y Valiente dejan de ser texto.
+  const peligro = currentNode(state.map)?.danger ?? 1;
+  if (peligro >= 4 && state.traits.includes('cobarde')) {
+    modifiers = upsertModifier(modifiers, {
+      id: 'panico', label: 'Pánico', skills: { '*': 2 }, turns: 2, kind: 'debuff',
+    });
+  } else if (peligro >= 4 && state.traits.includes('valiente')) {
+    modifiers = upsertModifier(modifiers, {
+      id: 'temple', label: 'Sangre fría', skills: { '*': 1 }, turns: 2, kind: 'buff',
+    });
+  }
+
+  // 7) Sobrecarga: la interfaz ya avisaba, pero no penalizaba nada.
+  const cap = capacityOf(inventory, effectiveLevel(state, 'Fuerza'),
+    state.base.established && state.base.structures.includes('almacen') && state.map.currentZone === state.base.location,
+    state.customItems);
+  if (cap.over) {
+    modifiers = upsertModifier(modifiers, {
+      id: 'sobrecarga', label: 'Sobrecargado', skills: { 'Sigilo': 1, 'Rastreo': 1 }, turns: 2, kind: 'debuff',
+    });
+  }
+
+  // 8) Modificadores temporales.
+  if (impact.modifier) modifiers = upsertModifier(modifiers, { ...impact.modifier, kind: 'debuff' });
+  const modTick = tickModifiers(modifiers);
+  modifiers = modTick.modifiers;
+  for (const m of modTick.expired) msgs.push({ kind: 'system', text: `Se te pasa: ${m.label.toLowerCase()}.` });
+
+  const hp = clamp(state.hp + impact.hp + tick.hpDelta + extraHp, 0, state.maxHp);
+  const damageTaken = state.stats.damageTaken + Math.max(0, -(impact.hp + tick.hpDelta + extraHp));
+
+  return {
+    state: {
+      ...state,
+      minutes: state.minutes + minutes,
+      inventory,
+      weather: adv.weather,
+      forecast: adv.forecast,
+      weatherAccum: adv.accum,
+      injuries: healed.injuries,
+      diseases,
+      modifiers,
+      needs,
+      hp,
+      counters,
+      stats: { ...state.stats, damageTaken, daysSurvived: dayOf(state.minutes + minutes) },
+    },
+    messages: msgs,
+  };
+}
+
+/** Cierra la partida si el personaje ha llegado a cero. */
+function checkDeath(state: GameState): GameState {
+  if (state.hp > 0 || state.screen === 'death') return state;
+  const cause = deathCauseFrom(state);
+  return withLog({ ...state, screen: 'death', deathCause: cause },
+    [{ kind: 'bad', text: `Aquí termina la historia de ${state.charName}. Causa: ${cause.toLowerCase()}.` }]);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Turno completo — una sola transición atómica
 // ─────────────────────────────────────────────────────────────────────────────
 function applyTurn(state: GameState, playerText: string | null, result: TurnResult, rng: () => number): GameState {
-  const genre = state.genre ?? 'apocalypse';
   const msgs: { kind: LogEntry['kind']; text: string }[] = [];
   if (playerText) msgs.push({ kind: 'player', text: playerText });
   if (result.narrative) msgs.push({ kind: 'story', text: result.narrative });
 
   const minutes = clamp(Math.round(result.timeMinutes), 1, 720);
-  const nextMinutes = state.minutes + minutes;
-  const day = dayOf(nextMinutes);
 
-  // 1) El mundo puede traer objetos que no estaban en el catálogo (una colilla,
-  //    una chapa, el cuaderno de otro). Se registran antes de repartirlos.
+  // 1) Objetos que el mundo introduce, antes de repartirlos.
   const registered = registerItems(state.customItems, result.newItems);
   const customItems = registered.items;
   if (registered.added.length) {
@@ -159,19 +342,17 @@ function applyTurn(state: GameState, playerText: string | null, result: TurnResu
       msgs.push({ kind: 'good', text: `Leyendo «${name}» aprendes: ${learned.join(', ')}.` });
     }
   }
-  // El narrador también puede enseñarte una receta sin libro de por medio:
-  // unas notas en una pared, alguien que te lo explica, probar hasta que sale.
   const taught = result.recipesLearned.filter((r) => RECIPE_BY_ID[r] && !knownRecipes.includes(r));
   if (taught.length) {
     knownRecipes = [...knownRecipes, ...taught];
     msgs.push({ kind: 'good', text: `Aprendes a fabricar: ${taught.join(', ')}.` });
   }
 
-  // 4) Mapa (antes que el clima: el refugio depende de la zona nueva).
+  // 4) Mapa. Va antes del clima: estar a cubierto depende de la zona nueva.
   let map = state.map;
   let zonesDiscovered = state.stats.zonesDiscovered;
   if (result.mapUpdate) {
-    const applied = applyMapUpdate(map, result.mapUpdate, day, rng);
+    const applied = applyMapUpdate(map, result.mapUpdate, dayOf(state.minutes + minutes), rng);
     map = applied.map;
     if (applied.discovered.length) {
       zonesDiscovered += applied.discovered.length;
@@ -179,18 +360,7 @@ function applyTurn(state: GameState, playerText: string | null, result: TurnResu
     }
   }
 
-  // 5) Clima.
-  const adv = advanceWeather(state, minutes, genre, rng);
-  if (adv.changed && adv.weather.id !== state.weather.id) {
-    const w = WEATHER[adv.weather.id];
-    msgs.push({ kind: w.severe ? 'warn' : 'system', text: `Cambia el tiempo: ${w.label.toLowerCase()}. ${w.desc}` });
-  }
-  const sheltered = isSheltered(map);
-  const impact = weatherImpact(adv.weather, sheltered, inventory, minutes, state.traits, rng, customItems);
-  if (impact.lose.length) inventory = removeItems(inventory, impact.lose);
-  for (const m of impact.messages) msgs.push({ kind: impact.hp < 0 ? 'bad' : 'system', text: m });
-
-  // 6) Lesiones: las que indica el narrador + curación natural.
+  // 5) Lesiones y enfermedades que indica el narrador.
   let injuries: Injury[] = state.injuries.map((i) => ({ ...i }));
   for (const upd of result.injuriesUpdate) {
     if (!INJURY_ZONE_IDS.includes(upd.zone)) continue;
@@ -207,18 +377,12 @@ function applyTurn(state: GameState, playerText: string | null, result: TurnResu
         injuries.push({ zone: upd.zone, severity: upd.severity, label: upd.label || 'Herida', age: 0 });
         msgs.push({ kind: 'bad', text: `Nueva lesión — ${INJURY_ZONES[upd.zone].label}: ${upd.label || 'herida'}.` });
       }
-    } else {
-      if (injuries.some((i) => i.zone === upd.zone)) {
-        injuries = injuries.filter((i) => i.zone !== upd.zone);
-        msgs.push({ kind: 'good', text: `Tu lesión en ${INJURY_ZONES[upd.zone].label.toLowerCase()} ya no te limita.` });
-      }
+    } else if (injuries.some((i) => i.zone === upd.zone)) {
+      injuries = injuries.filter((i) => i.zone !== upd.zone);
+      msgs.push({ kind: 'good', text: `Tu lesión en ${INJURY_ZONES[upd.zone].label.toLowerCase()} ya no te limita.` });
     }
   }
-  const healed = healInjuries(injuries, minutes, state.traits);
-  injuries = healed.injuries;
-  for (const m of healed.messages) msgs.push({ kind: 'good', text: m });
 
-  // 7) Enfermedades: las del narrador + progresión + riesgo ambiental.
   let diseases: ActiveDisease[] = state.diseases.map((d) => ({ ...d }));
   for (const upd of result.diseasesUpdate) {
     if (!(upd.id in DISEASES)) continue;
@@ -233,124 +397,44 @@ function applyTurn(state: GameState, playerText: string | null, result: TurnResu
       msgs.push({ kind: 'good', text: `Te has curado de: ${def.label.toLowerCase()}.` });
     }
   }
-  const progressed = progressDiseases(diseases, minutes);
-  diseases = progressed.diseases;
-  for (const m of progressed.messages) msgs.push({ kind: 'warn', text: m });
 
-  const risk = naturalDiseaseRisk({ ...state, injuries, inventory, needs: state.needs }, minutes, rng);
-  for (const d of risk.add) if (!diseases.some((x) => x.id === d.id)) diseases.push(d);
-  for (const m of risk.messages) msgs.push({ kind: 'bad', text: m });
-
-  // 8) Necesidades y daño acumulado — una sola vez, con todo lo anterior ya resuelto.
-  const tick = tickNeeds(state.needs, minutes, state.traits, diseases, {
-    hunger: clamp(result.hungerChange, -40, 60) + (impact.needs.hunger ?? 0),
-    thirst: clamp(result.thirstChange, -40, 60) + (impact.needs.thirst ?? 0),
-    sleep: clamp(result.sleepChange, -40, 80) + (impact.needs.sleep ?? 0),
-    temp: clamp(result.tempChange, -5, 5) + (impact.needs.temp ?? 0),
-  });
-  for (const w of tick.warnings) msgs.push({ kind: 'warn', text: w });
-
-  // 9) Vida.
-  const hpChange = clamp(Math.round(result.hpChange), -60, 40);
-  const totalHp = hpChange + impact.hp + tick.hpDelta;
-  const hp = clamp(state.hp + totalHp, 0, state.maxHp);
-  const damageTaken = state.stats.damageTaken + Math.max(0, -totalHp);
-
-  // 10) Experiencia.
-  const { skillXp, levelUps } = grantXp(state.skillXp, result.skillXp);
+  // 6) Experiencia. El modelo reporta en su propia escala, acotada aparte.
+  const { skillXp, levelUps } = grantXp(state.skillXp, result.skillXp, 'model');
   for (const l of levelUps) msgs.push({ kind: 'good', text: `⬆ ${l}` });
 
-  // 11) Rasgos con efecto periódico.
-  const counters = { ...state.counters };
-  let modifiers = state.modifiers;
-  let extraHp = 0;
-  const needs = { ...tick.needs };
-
-  if (state.traits.includes('adicto')) {
-    counters.adicto = (counters.adicto ?? 0) + 1;
-    if (counters.adicto % 5 === 0) {
-      const dose = inventory.find((s) => s.name === 'Morfina' || s.name === 'Alcohol');
-      if (dose) {
-        inventory = removeItems(inventory, [{ name: dose.name, qty: 1 }]);
-        msgs.push({ kind: 'system', text: `Sientes el tirón. Consumes ${dose.name} y el malestar cede.` });
-      } else {
-        extraHp -= 8;
-        modifiers = upsertModifier(modifiers, {
-          id: 'abstinencia', label: 'Síndrome de abstinencia',
-          skills: { '*': 2 }, turns: 4, kind: 'debuff',
-        });
-        msgs.push({ kind: 'bad', text: 'La abstinencia te sacude: temblores, sudor frío y todo te sale peor durante un rato.' });
-      }
-    }
-  }
-  if (state.traits.includes('claustrofobico') && sheltered) {
-    needs.sleep = clamp(needs.sleep - 7, 0, 100);
-    needs.hunger = clamp(needs.hunger - 4, 0, 100);
-    msgs.push({ kind: 'warn', text: 'Las paredes se te echan encima. La ansiedad te consume más rápido aquí dentro.' });
-  }
-  if (state.traits.includes('paranoico')) {
-    counters.paranoico = (counters.paranoico ?? 0) + 1;
-    if (counters.paranoico % 5 === 0) {
-      const events = [
-        { text: 'Una sombra en el rabillo del ojo. Juras que alguien te sigue.', sleep: -6, hp: 0 },
-        { text: 'Escuchas pasos que no existen y el corazón se te dispara.', sleep: 0, hp: -4 },
-        { text: 'Convencido de que te han tocado las cosas, revisas el petate tres veces.', sleep: -5, hp: 0 },
-        { text: 'Crees oír voces al otro lado de la pared. Tardas horas en calmarte.', sleep: -5, hp: -3 },
-      ];
-      const ev = events[Math.floor(rng() * events.length)];
-      needs.sleep = clamp(needs.sleep + ev.sleep, 0, 100);
-      extraHp += ev.hp;
-      msgs.push({ kind: 'warn', text: `👁 ${ev.text}` });
-    }
-  }
-
-  // 12) Modificadores temporales.
-  if (impact.modifier) {
-    modifiers = upsertModifier(modifiers, { ...impact.modifier, kind: 'debuff' });
-  }
-  const modTick = tickModifiers(modifiers);
-  modifiers = modTick.modifiers;
-  for (const m of modTick.expired) msgs.push({ kind: 'system', text: `Se te pasa: ${m.label.toLowerCase()}.` });
-
-  const finalHp = clamp(hp + extraHp, 0, state.maxHp);
-
-  let next: GameState = {
-    ...state,
-    minutes: nextMinutes,
-    inventory,
-    knownRecipes,
-    customItems,
-    map,
+  // 7) El mundo avanza: clima, enfermedades, necesidades, daño, modificadores.
+  const base: GameState = {
+    ...state, inventory, customItems, knownRecipes, map, injuries, diseases, skillXp,
     location: result.location?.trim() || map.currentZone || state.location,
-    weather: adv.weather,
-    forecast: adv.forecast,
-    weatherAccum: adv.accum,
-    injuries,
-    diseases,
-    modifiers,
-    needs,
-    hp: finalHp,
-    skillXp,
-    counters,
     sceneDescription: result.sceneDescription || state.sceneDescription,
+  };
+  const world = advanceWorld(base, minutes, {
+    rng,
+    sheltered: result.sheltered,
+    isAction: true,
+    needsDelta: {
+      hunger: clamp(result.hungerChange, -40, 60),
+      thirst: clamp(result.thirstChange, -40, 60),
+      sleep: clamp(result.sleepChange, -40, 80),
+      temp: clamp(result.tempChange, -5, 5),
+    },
+  });
+
+  const hpChange = clamp(Math.round(result.hpChange), -60, 40);
+  let next: GameState = {
+    ...world.state,
+    hp: clamp(world.state.hp + hpChange, 0, state.maxHp),
     stats: {
-      ...state.stats,
+      ...world.state.stats,
       actions: state.stats.actions + 1,
-      daysSurvived: day,
       zonesDiscovered,
-      damageTaken,
+      damageTaken: world.state.stats.damageTaken + Math.max(0, -hpChange),
       levelsGained: state.stats.levelsGained + levelUps.length,
     },
   };
 
-  next = withLog(next, msgs);
-
-  if (finalHp <= 0) {
-    const cause = deathCauseFrom(next);
-    next = { ...next, screen: 'death', deathCause: cause };
-    next = withLog(next, [{ kind: 'bad', text: `Aquí termina la historia de ${state.charName}. Causa: ${cause.toLowerCase()}.` }]);
-  }
-  return next;
+  next = withLog(next, [...msgs, ...world.messages]);
+  return checkDeath(next);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -386,7 +470,7 @@ export function reducer(state: GameState, action: Action): GameState {
       const genre = state.genre ?? 'apocalypse';
       if (!arch) return state;
 
-      const levels = startingSkillLevels(arch.bonuses, arch.penalties, state.traits);
+      const { levels, penalty } = startingSkills(arch.bonuses, arch.penalties, state.traits);
       const maxHp = maxHpFor(state.traits);
       const inventory: Stack[] = [];
       for (const name of arch.items) {
@@ -411,6 +495,7 @@ export function reducer(state: GameState, action: Action): GameState {
         traits: state.traits,
         narrator: state.narrator,
         skillXp: makeSkillXp(levels),
+        basePenalty: penalty,
         hp: maxHp,
         maxHp,
         needs: { ...INITIAL_NEEDS },
@@ -441,15 +526,28 @@ export function reducer(state: GameState, action: Action): GameState {
         ? state.inventory
         : removeItems(state.inventory, [{ name: action.name, qty: 1 }]);
 
+      const msgs: { kind: LogEntry['kind']; text: string }[] = [
+        { kind: 'system', text: `${u.verb ?? 'Usas'} ${action.name}.` },
+      ];
+
+      // Las curas instantáneas quedan para lo específico y escaso; el resto
+      // inicia un tratamiento que baja un estadio cada diez horas.
       let diseases = state.diseases;
-      const msgs: { kind: LogEntry['kind']; text: string }[] = [];
-      if (u.cures?.length) {
-        const cured = diseases.filter((d) => u.cures!.includes(d.id));
-        if (cured.length) {
-          diseases = diseases.filter((d) => !u.cures!.includes(d.id));
-          msgs.push({ kind: 'good', text: `Te curas de: ${cured.map((d) => DISEASES[d.id].label.toLowerCase()).join(', ')}.` });
+      if (u.curesNow?.length) {
+        const curadas = diseases.filter((d) => u.curesNow!.includes(d.id));
+        if (curadas.length) {
+          diseases = diseases.filter((d) => !u.curesNow!.includes(d.id));
+          msgs.push({ kind: 'good', text: `Te curas de: ${curadas.map((d) => DISEASES[d.id].label.toLowerCase()).join(', ')}.` });
         }
       }
+      if (u.cures?.length) {
+        const started = startTreatment(diseases, u.cures);
+        diseases = started.diseases;
+        if (started.treated.length) {
+          msgs.push({ kind: 'good', text: `Empiezas tratamiento contra ${started.treated.map((id) => DISEASES[id as keyof typeof DISEASES].label.toLowerCase()).join(', ')}. Tardará horas en hacer efecto.` });
+        }
+      }
+
       let injuries = state.injuries;
       if (u.healInjury) {
         const worst = [...injuries].sort((a, b) => b.severity - a.severity)[0];
@@ -464,19 +562,15 @@ export function reducer(state: GameState, action: Action): GameState {
         }
       }
 
-      const tick = tickNeeds(state.needs, minutes, state.traits, diseases, {
-        hunger: u.hunger, thirst: u.thirst, sleep: u.sleep, temp: u.temp,
+      const world = advanceWorld({ ...state, inventory, diseases, injuries }, minutes, {
+        rng: action.rng ?? R,
+        needsDelta: { hunger: u.hunger, thirst: u.thirst, sleep: u.sleep, temp: u.temp },
       });
-      const hp = clamp(state.hp + (u.hp ?? 0) + tick.hpDelta, 0, state.maxHp);
-      msgs.unshift({ kind: 'system', text: `${u.verb ?? 'Usas'} ${action.name}.` });
-
-      let next: GameState = {
-        ...state, inventory, diseases, injuries, needs: tick.needs, hp,
-        minutes: state.minutes + minutes,
-      };
-      next = withLog(next, msgs);
-      if (hp <= 0) next = { ...next, screen: 'death', deathCause: deathCauseFrom(next) };
-      return next;
+      const next = withLog({
+        ...world.state,
+        hp: clamp(world.state.hp + (u.hp ?? 0), 0, state.maxHp),
+      }, [...msgs, ...world.messages]);
+      return checkDeath(next);
     }
 
     case 'dropItem': {
@@ -489,28 +583,30 @@ export function reducer(state: GameState, action: Action): GameState {
       const rng = action.rng ?? R;
       const plan = planCraft(action.recipeId, state.inventory, (s) => effectiveLevel(state, s), isAtWorkshop(state), state.customItems);
       if (!plan) return state;
-      if (!plan.canCraft) {
-        return withLog(state, [{ kind: 'warn', text: plan.blockers.join('. ') }]);
-      }
+      if (!plan.canCraft) return withLog(state, [{ kind: 'warn', text: plan.blockers.join('. ') }]);
+
       const out = resolveCraft(plan, rng);
       let inventory = removeItems(state.inventory, out.consumed);
       inventory = addItems(inventory, out.produced);
-      const { skillXp, levelUps } = grantXp(state.skillXp, out.xp);
-      const tick = tickNeeds(state.needs, out.minutes, state.traits, state.diseases);
 
-      const msgs: { kind: LogEntry['kind']; text: string }[] = [
+      // Repetir la misma receta rinde cada vez menos experiencia.
+      const factor = repeatFactor(state.counters, action.recipeId);
+      const xp = Object.fromEntries(
+        Object.entries(out.xp).map(([k, v]) => [k, Math.round(v * factor)]),
+      );
+      const { skillXp, levelUps } = grantXp(state.skillXp, xp, 'recipe');
+
+      const counters = { ...state.counters, [`craft:${action.recipeId}`]: (state.counters[`craft:${action.recipeId}`] ?? 0) + 1 };
+      const world = advanceWorld({ ...state, inventory, skillXp, counters }, out.minutes, { rng });
+      const next = withLog({
+        ...world.state,
+        stats: { ...world.state.stats, itemsCrafted: state.stats.itemsCrafted + (out.ok ? 1 : 0) },
+      }, [
         { kind: out.ok ? 'good' : 'bad', text: out.message },
         ...levelUps.map((l) => ({ kind: 'good' as const, text: `⬆ ${l}` })),
-      ];
-      let next: GameState = {
-        ...state, inventory, skillXp, needs: tick.needs,
-        hp: clamp(state.hp + tick.hpDelta, 0, state.maxHp),
-        minutes: state.minutes + out.minutes,
-        stats: { ...state.stats, itemsCrafted: state.stats.itemsCrafted + (out.ok ? 1 : 0) },
-      };
-      next = withLog(next, msgs);
-      if (next.hp <= 0) next = { ...next, screen: 'death', deathCause: deathCauseFrom(next) };
-      return next;
+        ...world.messages,
+      ]);
+      return checkDeath(next);
     }
 
     case 'improvise': {
@@ -555,7 +651,7 @@ export function reducer(state: GameState, action: Action): GameState {
           text: `Te sale: ${plan.produces.map((p) => `${p.name}${p.qty > 1 ? ` ×${p.qty}` : ''}`).join(', ')}.`
             + (plan.consumes.length ? ` Has gastado ${plan.consumes.map((c) => c.name).join(', ')}.` : ''),
         });
-        if (plan.skill) xp = { [plan.skill]: Math.max(1, Math.round(difficulty * 8)) };
+        if (plan.skill) xp = { [plan.skill]: Math.max(2, Math.round(difficulty * 12)) };
       } else {
         // Un fallo devuelve la mitad de lo gastado, como en el crafteo con receta.
         const salvage = plan.consumes
@@ -568,26 +664,22 @@ export function reducer(state: GameState, action: Action): GameState {
           text: 'No sale. Entre las manos se te queda una cosa inservible'
             + (salvage.length ? `, aunque recuperas ${salvage.map((c) => c.name).join(', ')}.` : '.'),
         });
-        if (plan.skill) xp = { [plan.skill]: 1 };
+        if (plan.skill) xp = { [plan.skill]: 1 };  // fallar enseña poco
       }
 
-      const { skillXp, levelUps } = grantXp(state.skillXp, xp);
+      const { skillXp, levelUps } = grantXp(state.skillXp, xp, 'recipe');
       for (const l of levelUps) msgs.push({ kind: 'good', text: `⬆ ${l}` });
-      const tick = tickNeeds(state.needs, minutes, state.traits, state.diseases);
 
-      let next: GameState = {
-        ...state,
-        inventory,
+      const world = advanceWorld({
+        ...state, inventory, skillXp,
         customItems: success ? registered.items : state.customItems,
-        skillXp,
-        needs: tick.needs,
-        hp: clamp(state.hp + tick.hpDelta, 0, state.maxHp),
-        minutes: state.minutes + minutes,
-        stats: { ...state.stats, itemsCrafted: state.stats.itemsCrafted + (success ? 1 : 0) },
-      };
-      next = withLog(next, msgs);
-      if (next.hp <= 0) next = { ...next, screen: 'death', deathCause: deathCauseFrom(next) };
-      return next;
+      }, minutes, { rng });
+
+      const next = withLog({
+        ...world.state,
+        stats: { ...world.state.stats, itemsCrafted: state.stats.itemsCrafted + (success ? 1 : 0) },
+      }, [...msgs, ...world.messages]);
+      return checkDeath(next);
     }
 
     case 'registerItems': {
@@ -633,10 +725,12 @@ export function reducer(state: GameState, action: Action): GameState {
       if (state.map.currentZone === state.base.location) {
         return withLog(state, [{ kind: 'system', text: 'Ya estás en el refugio.' }]);
       }
-      const minutes = 150;
+      // Antes eran 150 minutos fijos, estuvieras a una zona o a doce.
+      const saltos = graphDistance(state.map, state.map.currentZone, state.base.location);
+      const minutes = clamp(Math.round(90 * Math.max(1, saltos)), 60, 720);
       const daysAway = Math.floor((state.minutes - state.base.lastVisited) / 1440);
       const msgs: { kind: LogEntry['kind']; text: string }[] = [
-        { kind: 'system', text: `Haces el camino de vuelta al refugio. ${daysAway >= 1 ? `Llevabas ${daysAway} día(s) fuera.` : ''}`.trim() },
+        { kind: 'system', text: `Haces el camino de vuelta al refugio: ${saltos} ${saltos === 1 ? 'zona' : 'zonas'} de viaje. ${daysAway >= 1 ? `Llevabas ${daysAway} ${daysAway === 1 ? 'día' : 'días'} fuera.` : ''}`.trim() },
       ];
       let storage = state.base.storage;
 
@@ -663,25 +757,80 @@ export function reducer(state: GameState, action: Action): GameState {
         msgs.push({ kind: 'bad', text: `Alguien ha entrado en el refugio: falta ${losses.map((l) => l.name).join(', ')}. Un muro lo evitaría.` });
       }
 
-      const restful = state.base.structures.includes('cama');
-      const tick = tickNeeds(state.needs, minutes, state.traits, state.diseases, {
-        sleep: restful ? 25 : 0,
-      });
-      if (restful) msgs.push({ kind: 'good', text: 'El camastro te deja recuperar algo de sueño nada más llegar.' });
+      // Riesgo de encuentro proporcional al peligro medio del camino.
+      const peligroMedio = averageDanger(state.map, state.map.currentZone, state.base.location);
+      if (peligroMedio >= 3 && rng() < 0.12 * peligroMedio) {
+        const dano = Math.round(4 + rng() * 6 * peligroMedio);
+        msgs.push({ kind: 'bad', text: `El camino no estaba tranquilo. Llegas al refugio con ${dano} de vida menos.` });
+        state = { ...state, hp: clamp(state.hp - dano, 0, state.maxHp) };
+      }
 
       const map = { ...state.map, currentZone: state.base.location };
-      let next: GameState = {
-        ...state,
-        map,
-        location: state.base.location,
-        minutes: state.minutes + minutes,
-        needs: tick.needs,
-        hp: clamp(state.hp + tick.hpDelta + (restful ? 5 : 0), 0, state.maxHp),
+      const world = advanceWorld({
+        ...state, map, location: state.base.location,
         base: { ...state.base, storage, lastVisited: state.minutes + minutes },
-      };
-      next = withLog(next, msgs);
-      if (next.hp <= 0) next = { ...next, screen: 'death', deathCause: deathCauseFrom(next) };
-      return next;
+      }, minutes, { rng });
+
+      const next = withLog(world.state, [...msgs, ...world.messages]);
+      return checkDeath(next);
+    }
+
+    case 'sleep': {
+      const rng = action.rng ?? R;
+      const hours = clamp(Math.round(action.hours), 1, 12);
+      const minutes = hours * 60;
+      const enRefugio = state.base.established && state.map.currentZone === state.base.location;
+      const camastro = enRefugio && state.base.structures.includes('cama');
+      const muro = enRefugio && state.base.structures.includes('muro');
+      const generador = enRefugio && state.base.structures.includes('generador');
+      const bajoTecho = isSheltered(state.map) || enRefugio;
+
+      const msgs: { kind: LogEntry['kind']; text: string }[] = [
+        { kind: 'player', text: `Duermo ${hours} ${hours === 1 ? 'hora' : 'horas'}.` },
+      ];
+
+      // El sueño que se recupera depende de dónde duermas. El camastro por fin
+      // hace lo que promete su descripción, y no solo al volver de un viaje.
+      const calidad = camastro ? 16 : bajoTecho ? 12 : 9;
+      let recuperado = hours * calidad;
+      let despertado = false;
+
+      // Riesgo nocturno: el muro y el generador sirven justo para esto.
+      const peligro = currentNode(state.map)?.danger ?? 2;
+      let riesgo = peligro * 0.028 * hours;
+      if (muro) riesgo *= 0.12;
+      if (generador) riesgo *= 0.5;
+      if (enRefugio) riesgo *= 0.6;
+      if (!bajoTecho) riesgo *= 1.8;
+
+      let hpExtra = camastro ? 5 : 0;
+      if (rng() < Math.min(0.7, riesgo)) {
+        despertado = true;
+        recuperado *= 0.45;
+        const dano = Math.round(3 + rng() * 5 * peligro);
+        hpExtra -= dano;
+        msgs.push({ kind: 'bad', text: muro
+          ? `Algo golpea el muro de madrugada. No entra, pero ya no vuelves a dormirte. Pierdes ${dano} de vida entre el susto y el frío.`
+          : `Te despiertas de golpe: no estabas solo. Sales de ahí con ${dano} de vida menos y sin haber descansado.` });
+      } else {
+        msgs.push({ kind: 'good', text: camastro
+          ? 'El camastro cumple. Duermes de un tirón.'
+          : bajoTecho ? 'Duermes a cubierto, con un ojo medio abierto.' : 'Duermes a la intemperie, mal y a ratos.' });
+      }
+
+      const world = advanceWorld(state, minutes, {
+        rng,
+        resting: true,
+        sheltered: bajoTecho,
+        needsDelta: { sleep: Math.round(recuperado) },
+      });
+
+      const next = withLog({
+        ...world.state,
+        hp: clamp(world.state.hp + hpExtra, 0, state.maxHp),
+        counters: { ...world.state.counters, ultimoSueno: world.state.minutes },
+      }, [...msgs, ...world.messages]);
+      return checkDeath(despertado ? next : next);
     }
 
     case 'build': {
@@ -700,20 +849,21 @@ export function reducer(state: GameState, action: Action): GameState {
       if (missing.length) {
         return withLog(state, [{ kind: 'warn', text: `Te faltan materiales: ${missing.map((m) => `${m.name} ×${m.qty}`).join(', ')}.` }]);
       }
+
       const inventory = removeItems(state.inventory, def.mats);
-      const tick = tickNeeds(state.needs, def.minutes, state.traits, state.diseases);
-      const { skillXp, levelUps } = grantXp(state.skillXp, { [def.req.skill]: 5 });
-      let next: GameState = {
-        ...state, inventory, skillXp, needs: tick.needs,
-        hp: clamp(state.hp + tick.hpDelta, 0, state.maxHp),
-        minutes: state.minutes + def.minutes,
+      const { skillXp, levelUps } = grantXp(state.skillXp, { [def.req.skill]: 6 }, 'recipe');
+      const world = advanceWorld({
+        ...state, inventory, skillXp,
         base: { ...state.base, structures: [...state.base.structures, action.structure] },
-      };
-      next = withLog(next, [
+      }, def.minutes, { rng: action.rng ?? R, sheltered: true });
+
+      const next = withLog(world.state, [
         { kind: 'good', text: `Construyes ${def.icon} ${def.label}. ${def.desc}` },
         ...levelUps.map((l) => ({ kind: 'good' as const, text: `⬆ ${l}` })),
+        ...world.messages,
       ]);
-      return next;
+      // Construir cuesta horas, y esas horas pueden matarte de sed.
+      return checkDeath(next);
     }
 
     case 'deposit': {
@@ -748,8 +898,10 @@ export function reducer(state: GameState, action: Action): GameState {
       };
     }
 
-    case 'addDiary':
-      return { ...state, diary: [...state.diary, action.entry] };
+    case 'addDiary': {
+      const diary = [...state.diary, action.entry];
+      return { ...state, diary: diary.length > MAX_DIARY ? diary.slice(diary.length - MAX_DIARY) : diary };
+    }
 
     case 'pushHistory': {
       const history = [...state.history, { role: action.role, content: action.content }];

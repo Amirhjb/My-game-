@@ -24,8 +24,9 @@
   /* --- Texto --- */
   --text:     oklch(93% 0.008 var(--h));
   --text-mid: oklch(72% 0.010 var(--h));
-  --text-dim: oklch(56% 0.010 var(--h));
-  --text-faint: oklch(42% 0.010 var(--h));
+  /* Subidos: 4,27:1 y 2,35:1 no llegaban al mínimo de la WCAG para texto normal. */
+  --text-dim: oklch(66% 0.010 var(--h));
+  --text-faint: oklch(56% 0.010 var(--h));
 
   /* --- Acento --- */
   --accent:      oklch(78% var(--c) var(--h));

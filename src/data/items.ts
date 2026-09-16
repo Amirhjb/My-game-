@@ -26,7 +26,7 @@ export const ITEM_DB: Record<string, ItemDef> = {
   // ── Médico ───────────────────────────────────────────────────────────────
   'Botiquín completo': {
     kg: 1.5, l: 2.0, tags: ['medical'],
-    use: { hp: 35, healInjury: 2, cures: ['wound_infection', 'fever', 'respiratory'], minutes: 20, verb: 'Usar' },
+    use: { hp: 28, healInjury: 2, cures: ['wound_infection'], minutes: 25, verb: 'Usar' },
   },
   'Botiquín pequeño': {
     kg: 0.6, l: 0.8, tags: ['medical'],
@@ -43,19 +43,19 @@ export const ITEM_DB: Record<string, ItemDef> = {
   },
   'Antibióticos': {
     kg: 0.1, l: 0.1, tags: ['medical'],
-    use: { cures: ['wound_infection', 'fever', 'respiratory'], minutes: 2, verb: 'Tomar' },
+    use: { cures: ['wound_infection', 'fever', 'respiratory'], minutes: 5, verb: 'Tomar' },
   },
   'Carbón activado': {
     kg: 0.1, l: 0.1, tags: ['medical', 'cure'],
-    use: { cures: ['food_poison'], minutes: 2, verb: 'Tomar' },
+    use: { curesNow: ['food_poison'], minutes: 5, verb: 'Tomar' },
   },
   'Yoduro de potasio': {
     kg: 0.05, l: 0.05, tags: ['medical', 'cure'],
-    use: { cures: ['radiation'], minutes: 2, verb: 'Tomar' },
+    use: { curesNow: ['radiation'], minutes: 5, verb: 'Tomar' },
   },
   'Suero oral': {
     kg: 0.2, l: 0.25, tags: ['medical', 'cure', 'water'],
-    use: { thirst: 40, hunger: 8, cures: ['food_poison'], minutes: 5, verb: 'Beber' },
+    use: { thirst: 40, hunger: 8, cures: ['food_poison'], minutes: 8, verb: 'Beber' },
   },
   'Alcohol': {
     kg: 0.5, l: 0.5, tags: ['medical', 'cure'], materials: { combustible: 0.1, antiseptico: 0.1 },
@@ -84,6 +84,24 @@ export const ITEM_DB: Record<string, ItemDef> = {
   'Botella de agua': {
     kg: 0.6, l: 0.6, tags: ['water'], materials: { recipiente: 0 },
     use: { thirst: 45, minutes: 4, verb: 'Beber' },
+  },
+  'Antorcha': {
+    kg: 0.6, l: 1.2, tags: ['tool', 'light', 'fire'], materials: { ignicion: 0.1, combustible: 0.15 },
+    desc: 'Arde una hora larga. No necesita pilas, pero hay que llevarla en la mano.',
+  },
+  'Caldo caliente': {
+    kg: 0.5, l: 0.5, tags: ['food'],
+    use: { hunger: 30, thirst: 22, hp: 4, minutes: 15, verb: 'Beber' },
+    desc: 'Reconforta más de lo que alimenta, y a veces eso es justo lo que hace falta.',
+  },
+  'Tablones': {
+    kg: 1.8, l: 3.0, tags: ['craft'], materials: { madera: 0, combustible: 0.15 },
+    desc: 'Cortados a medida y listos para levantar algo.',
+  },
+  'Ración sellada': {
+    kg: 0.45, l: 0.5, tags: ['food'],
+    use: { hunger: 42, thirst: 2, minutes: 10, verb: 'Comer' },
+    desc: 'Aguanta meses. Sabe a cartón, pero llena.',
   },
   'Carne curada': {
     kg: 0.3, l: 0.3, tags: ['food'],

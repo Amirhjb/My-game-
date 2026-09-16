@@ -8,6 +8,7 @@ import {
 } from '../ai/prompts';
 import { extractJson, neutralTurn, parseImprovise, parseTurn } from '../ai/schema';
 import { reducer, type Action } from '../engine/reducer';
+import { detectSkill, rollInstruction, rollSkill } from '../engine/rolls';
 import { clockOf, dayOf } from '../engine/rules';
 import { initialState, uid } from '../engine/state';
 import type { GameState, TurnResult } from '../engine/types';
@@ -42,6 +43,21 @@ export interface GameApi {
 }
 
 const NARRATIVE_TIMEOUT = 90_000;
+
+/**
+ * Generador con semilla del que se pueden sacar copias idénticas. Sirve para
+ * aplicar un turno dos veces (el reducer real y el cálculo local para el
+ * diario) y obtener exactamente el mismo resultado.
+ */
+function seededRng(seed: number) {
+  const inicial = seed >>> 0;
+  return {
+    fork() {
+      let s = inicial;
+      return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+    },
+  };
+}
 
 export function useGame(): GameApi {
   const [state, dispatch] = useReducer(reducer, initialState);
@@ -129,10 +145,16 @@ export function useGame(): GameApi {
     }
   }, []);
 
-  /** Entrada del diario al dormir. Es opcional: un fallo no corta la partida. */
-  const maybeDiary = useCallback(async (minutes: number, signal: AbortSignal) => {
-    if (minutes < 240) return;
-    const s = stateRef.current;
+  /**
+   * Entrada del diario al dormir. Recibe el estado YA aplicado: antes leía la
+   * referencia anterior porque React no había re-renderizado, y guardaba la
+   * vida, el hambre y la hora de antes de la noche que describía.
+   */
+  const maybeDiary = useCallback(async (minutes: number, after: GameState, signal: AbortSignal) => {
+    // Solo de noche: una caminata larga de media tarde no es una entrada nocturna.
+    const hora = Math.floor(after.minutes / 60) % 24;
+    if (minutes < 240 || !(hora >= 20 || hora <= 8)) return;
+    const s = after;
     const recent = s.log
       .filter((e) => e.kind === 'story')
       .slice(-4)
@@ -180,7 +202,15 @@ export function useGame(): GameApi {
 
       const snapshot = override ?? stateRef.current;
       const system = buildSystemPrompt(snapshot);
-      const userContent = isOpening ? buildOpeningMessage(snapshot) : playerText!;
+
+      // P-02: si la acción implica una habilidad, el motor tira y el modelo
+      // narra el resultado. Así subir de nivel se nota en la partida.
+      const skill = isOpening || !playerText ? null : detectSkill(playerText);
+      const roll = skill ? rollSkill(snapshot, skill, Math.random) : null;
+
+      const userContent = isOpening
+        ? buildOpeningMessage(snapshot)
+        : roll ? `${playerText}\n\n${rollInstruction(roll)}` : playerText!;
       const messages = [
         { role: 'system' as const, content: system },
         ...snapshot.history.map((m) => ({ role: m.role, content: m.content })),
@@ -220,14 +250,26 @@ export function useGame(): GameApi {
 
         turn = { ...turn, narrative: await applyStyle(turn.narrative, controller.signal) };
 
-        dispatch({ type: 'pushHistory', role: 'user', content: userContent });
+        // Un azar con semilla fija para este turno: así el estado que calculamos
+        // aquí para el diario es exactamente el que aplica el reducer, y no dos
+        // tiradas distintas de clima y enfermedades.
+        const semilla = seededRng(Date.now() ^ Math.floor(Math.random() * 0xffffff));
+
+        if (roll) dispatch({ type: 'log', kind: 'roll', text: roll.label });
+        dispatch({ type: 'pushHistory', role: 'user', content: playerText ?? userContent });
         dispatch({ type: 'pushHistory', role: 'assistant', content: turn.narrative.slice(0, 900) });
-        dispatch({ type: 'applyTurn', playerText, result: turn });
+        dispatch({ type: 'applyTurn', playerText, result: turn, rng: semilla.fork() });
         setSuggestions(turn.suggestions);
         setStatus('idle');
 
+        const conTirada = roll
+          ? reducer(snapshot, { type: 'log', kind: 'roll', text: roll.label })
+          : snapshot;
+        const after = reducer(conTirada, { type: 'applyTurn', playerText, result: turn, rng: semilla.fork() });
+        stateRef.current = after;
+
         void loadScene(turn.sceneDescription);
-        void maybeDiary(turn.timeMinutes, controller.signal);
+        void maybeDiary(turn.timeMinutes, after, controller.signal);
       } catch (err) {
         if (err instanceof AiError && err.kind === 'abort' && controller.signal.aborted) {
           setStatus('idle');

@@ -2,14 +2,19 @@ import { GENRES } from '../data/genres';
 import { putImage, imageUrl } from '../persistence/imageStore';
 import type { GenreId } from '../engine/types';
 
-/** Hash estable y corto para usar como clave de la imagen. */
-function hashKey(input: string): string {
+/** Hash numérico estable del texto. */
+function hash32(input: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < input.length; i++) {
     h ^= input.charCodeAt(i);
     h = Math.imul(h, 0x01000193);
   }
-  return `img_${(h >>> 0).toString(36)}_${input.length.toString(36)}`;
+  return h >>> 0;
+}
+
+/** Clave estable y corta para guardar la imagen. */
+function hashKey(input: string): string {
+  return `img_${hash32(input).toString(36)}_${input.length.toString(36)}`;
 }
 
 export function scenePrompt(description: string, genre: GenreId | null): string {
@@ -40,7 +45,10 @@ export async function fetchSceneImage(
     try {
       const url =
         `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}` +
-        `?width=768&height=448&nologo=true&model=flux&seed=${Math.abs(hashKey(prompt).length * 7919) % 99999}`;
+        // La semilla salía de la LONGITUD de la clave, que solo variaba entre 12 y
+        // 14 caracteres: escenas distintas compartían ilustración. Ahora usa el
+        // hash numérico completo.
+        `?width=768&height=448&nologo=true&model=flux&seed=${hash32(prompt) % 99999}`;
       const res = await fetch(url, { signal });
       if (!res.ok) return null;
       const blob = await res.blob();

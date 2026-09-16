@@ -15,6 +15,11 @@ export const round2 = (v: number) => Math.round(v * 100) / 100;
 
 export const DAY_MINUTES = 1440;
 
+/** Plural sencillo: `pl(1, 'acción', 'acciones')` → «1 acción». */
+export function pl(n: number, singular: string, plural: string): string {
+  return `${n} ${n === 1 ? singular : plural}`;
+}
+
 export function dayOf(minutes: number): number {
   return Math.floor(minutes / DAY_MINUTES) + 1;
 }
@@ -113,7 +118,9 @@ export function capacityOf(
 // ─────────────────────────────────────────────────────────────────────────────
 export interface SkillView { xp: number; base: number; level: number; penalty: number }
 
-export function skillPenalties(state: Pick<GameState, 'injuries' | 'diseases' | 'modifiers'>): Record<string, number> {
+export function skillPenalties(
+  state: Pick<GameState, 'injuries' | 'diseases' | 'modifiers' | 'basePenalty'>,
+): Record<string, number> {
   const pen: Record<string, number> = {};
   const add = (skill: string, amount: number) => { pen[skill] = (pen[skill] ?? 0) + amount; };
 
@@ -124,12 +131,19 @@ export function skillPenalties(state: Pick<GameState, 'injuries' | 'diseases' | 
     const mod = DISEASES[d.id].stages[d.stage].skillMod ?? 0;
     if (mod) for (const s of ALL_SKILLS) add(s, mod);
   }
+  // Los modificadores se declaran en positivo, igual que lesiones y
+  // enfermedades: `{ Rastreo: 2 }` es «dos niveles menos». Antes se restaban,
+  // y como el nivel final es base − penalización, todos los debuffs subían el
+  // nivel en vez de bajarlo.
   for (const m of state.modifiers) {
+    const signo = m.kind === 'buff' ? -1 : 1;
     for (const [skill, amount] of Object.entries(m.skills)) {
-      if (skill === '*') { for (const s of ALL_SKILLS) add(s, -amount); }
-      else add(skill, -amount);
+      if (skill === '*') { for (const s of ALL_SKILLS) add(s, amount * signo); }
+      else add(skill, amount * signo);
     }
   }
+  // Penalización permanente del oficio y los rasgos.
+  for (const [skill, amount] of Object.entries(state.basePenalty ?? {})) add(skill, amount);
   return pen;
 }
 
@@ -140,14 +154,16 @@ export function skillView(state: GameState): Record<string, SkillView> {
     const xp = state.skillXp[s] ?? 0;
     const base = xpToLevel(xp);
     const penalty = pen[s] ?? 0;
-    out[s] = { xp, base, level: Math.max(1, base - penalty), penalty };
+    // Suelo en 0, no en 1: nivel 0 significa «incapaz», y es lo que hace que
+    // un «−2 Cultivo» del Soldado signifique algo de verdad.
+    out[s] = { xp, base, level: Math.max(0, base - penalty), penalty };
   }
   return out;
 }
 
 export function effectiveLevel(state: GameState, skill: string): number {
   const pen = skillPenalties(state)[skill] ?? 0;
-  return Math.max(1, xpToLevel(state.skillXp[skill] ?? 0) - pen);
+  return Math.max(0, xpToLevel(state.skillXp[skill] ?? 0) - pen);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -156,16 +172,26 @@ export function effectiveLevel(state: GameState, skill: string): number {
 export interface NeedsTick { needs: Needs; hpDelta: number; warnings: string[] }
 
 /** Consumo por el paso del tiempo + lo que el turno haya aportado. */
+/** Consumo base por hora. Bajado tras medir que la sed dominaba la partida. */
+export const HUNGER_PER_HOUR = 2.6;
+export const THIRST_PER_HOUR = 4.2;
+export const SLEEP_PER_HOUR = 3;
+/** Durmiendo el cuerpo gasta bastante menos. */
+export const RESTING_UPKEEP = 0.4;
+
 export function tickNeeds(
   prev: Needs, minutes: number, traits: string[], diseases: ActiveDisease[],
   delta: { hunger?: number; thirst?: number; sleep?: number; temp?: number } = {},
+  opts: { resting?: boolean } = {},
 ): NeedsTick {
   const hours = minutes / 60;
   const t = (id: string) => traits.includes(id);
+  const upkeep = opts.resting ? RESTING_UPKEEP : 1;
 
-  const hungerRate = 4 * (t('gloton') ? 1.5 : 1) * (t('metabolismo_lento') ? 0.7 : 1);
-  const thirstRate = 7 * (t('sediento') ? 2 : 1) * (t('metabolismo_lento') ? 0.7 : 1);
-  const sleepRate = 3;
+  const hungerRate = HUNGER_PER_HOUR * upkeep * (t('gloton') ? 1.5 : 1) * (t('metabolismo_lento') ? 0.7 : 1);
+  const thirstRate = THIRST_PER_HOUR * upkeep * (t('sediento') ? 2 : 1) * (t('metabolismo_lento') ? 0.7 : 1);
+  // Dormir es justamente lo que repone el sueño: no se descuenta aquí.
+  const sleepRate = opts.resting ? 0 : SLEEP_PER_HOUR;
 
   let hunger = prev.hunger - hours * hungerRate + (delta.hunger ?? 0);
   let thirst = prev.thirst - hours * thirstRate + (delta.thirst ?? 0);
@@ -213,26 +239,103 @@ export function tickNeeds(
 // ─────────────────────────────────────────────────────────────────────────────
 export interface DiseaseTick { diseases: ActiveDisease[]; messages: string[] }
 
+/** Horas de tratamiento necesarias para bajar un estadio de enfermedad. */
+export const DISEASE_TREAT_HOURS = 10;
+
 export function progressDiseases(list: ActiveDisease[], minutes: number): DiseaseTick {
   const messages: string[] = [];
   const out: ActiveDisease[] = [];
+  const hours = minutes / 60;
+
   for (const d of list) {
     const def = DISEASES[d.id];
-    // Un descanso largo cura el estadio leve de lo que sea curable descansando.
-    if (def.restCures && d.stage === 0 && minutes >= 300) {
-      messages.push(`El descanso ha bastado para superar: ${def.label}.`);
+    let stage = d.stage;
+    let ticks = d.ticks;
+    let treated = d.treated ?? 0;
+    let curado = false;
+
+    // Tratamiento en curso: baja un estadio por cada tanda de horas.
+    if (treated > 0) {
+      treated += hours;
+      while (treated >= DISEASE_TREAT_HOURS && !curado) {
+        treated -= DISEASE_TREAT_HOURS;
+        if (stage === 0) {
+          messages.push(`El tratamiento ha acabado con tu ${def.label.toLowerCase()}.`);
+          curado = true;
+        } else {
+          stage = (stage - 1) as 0 | 1 | 2;
+          ticks = 0;
+          messages.push(`Tu ${def.label.toLowerCase()} remite: ahora es ${def.stages[stage].label.toLowerCase()}.`);
+        }
+      }
+      if (curado) continue;
+      out.push({ id: d.id, stage, ticks, treated });
       continue;
     }
-    const ticks = d.ticks + 1;
-    if (ticks >= def.progressEvery && d.stage < 2) {
-      const stage = (d.stage + 1) as 0 | 1 | 2;
-      messages.push(`Tu ${def.label.toLowerCase()} ha empeorado a ${def.stages[stage].label.toLowerCase()}. ${def.stages[stage].desc}`);
-      out.push({ id: d.id, stage, ticks: 0 });
+
+    // Un descanso largo baja un estadio de lo que se cure descansando, no solo
+    // el primero: antes el agotamiento en estadio 2 era literalmente incurable.
+    if (def.restCures && minutes >= 300) {
+      if (stage === 0) {
+        messages.push(`El descanso ha bastado para superar: ${def.label.toLowerCase()}.`);
+        continue;
+      }
+      stage = (stage - 1) as 0 | 1 | 2;
+      messages.push(`El descanso mejora tu ${def.label.toLowerCase()}: ahora es ${def.stages[stage].label.toLowerCase()}.`);
+      out.push({ id: d.id, stage, ticks: 0, treated: 0 });
+      continue;
+    }
+
+    // La progresión se mide en horas de juego, no en número de acciones.
+    ticks += hours;
+    if (ticks >= def.progressEvery && stage < 2) {
+      const next = (stage + 1) as 0 | 1 | 2;
+      messages.push(`Tu ${def.label.toLowerCase()} ha empeorado a ${def.stages[next].label.toLowerCase()}. ${def.stages[next].desc}`);
+      out.push({ id: d.id, stage: next, ticks: 0, treated: 0 });
     } else {
-      out.push({ ...d, ticks });
+      out.push({ ...d, ticks, treated: 0 });
     }
   }
   return { diseases: out, messages };
+}
+
+/** Marca enfermedades como «en tratamiento» al usar antibióticos o similares. */
+export function startTreatment(list: ActiveDisease[], ids: string[]): { diseases: ActiveDisease[]; treated: string[] } {
+  const treated: string[] = [];
+  const diseases = list.map((d) => {
+    if (!ids.includes(d.id) || (d.treated ?? 0) > 0) return d;
+    treated.push(d.id);
+    // Arranca con algo de crédito para que el primer uso ya se note.
+    return { ...d, treated: 0.01 };
+  });
+  return { diseases, treated };
+}
+
+/**
+ * La contaminación leve remite sola si pasas días lejos de la fuente.
+ * Sin esto, cruzar un sótano radiactivo era una partida perdida sin remedio.
+ */
+export function remitRadiation(
+  list: ActiveDisease[], minutes: number, rng: () => number,
+): { diseases: ActiveDisease[]; messages: string[] } {
+  const messages: string[] = [];
+  const diseases: ActiveDisease[] = [];
+  for (const d of list) {
+    if (d.id !== 'radiation') { diseases.push(d); continue; }
+    // ~2 % por hora de bajar un estadio: sin exposición nueva, el cuerpo gana.
+    if (rng() < 0.02 * (minutes / 60)) {
+      if (d.stage === 0) {
+        messages.push('Los síntomas de la contaminación han remitido por sí solos.');
+        continue;
+      }
+      const stage = (d.stage - 1) as 0 | 1 | 2;
+      messages.push('La contaminación remite un poco: el cuerpo va limpiándose.');
+      diseases.push({ ...d, stage, ticks: 0 });
+      continue;
+    }
+    diseases.push(d);
+  }
+  return { diseases, messages };
 }
 
 /** Riesgos ambientales que pueden generar enfermedad por sí solos. */
@@ -318,21 +421,34 @@ export function maxHpFor(traits: string[]): number {
   return hp;
 }
 
-export function startingSkillLevels(
+/**
+ * Ficha inicial. Las bonificaciones suben el nivel base; las penalizaciones se
+ * devuelven aparte, porque sumarlas al nivel base las anulaba: todo empieza en
+ * 1 y el recorte a [1,10] se las comía enteras.
+ */
+export function startingSkills(
   bonuses: Record<string, number>, penalties: Record<string, number>, traits: string[],
-): Record<string, number> {
+): { levels: Record<string, number>; penalty: Record<string, number> } {
   const levels: Record<string, number> = Object.fromEntries(ALL_SKILLS.map((s) => [s, 1]));
-  const apply = (map: Record<string, number>) => {
+  const penalty: Record<string, number> = {};
+
+  const subir = (map: Record<string, number>) => {
     for (const [k, v] of Object.entries(map)) {
-      if (k in levels) levels[k] = clamp(levels[k] + v, 1, 10);
+      if (k in levels && v > 0) levels[k] = clamp(levels[k] + v, 1, 10);
     }
   };
-  apply(bonuses);
-  apply(penalties);
+  const bajar = (map: Record<string, number>) => {
+    for (const [k, v] of Object.entries(map)) {
+      if (k in levels && v < 0) penalty[k] = (penalty[k] ?? 0) - v;
+    }
+  };
+
+  subir(bonuses);
+  bajar(penalties);
   for (const id of traits) {
     const t = TRAIT_BY_ID[id];
-    if (t?.skillBonus) apply(t.skillBonus);
-    if (t?.skillPenalty) apply(t.skillPenalty);
+    if (t?.skillBonus) subir(t.skillBonus);
+    if (t?.skillPenalty) bajar(t.skillPenalty);
   }
-  return levels;
+  return { levels, penalty };
 }

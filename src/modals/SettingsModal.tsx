@@ -155,8 +155,8 @@ export function SettingsModal({ api, onClose }: { api: GameApi; onClose: () => v
             </div>
             <p style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 7, lineHeight: 1.55 }}>
               {HAS_BUILT_IN_KEY
-                ? 'Esta compilación ya lleva una clave integrada desde .env.local. Lo que escribas aquí la sustituye solo en este navegador.'
-                : 'Para que la clave venga puesta de fábrica, ponla en .env.local y vuelve a ejecutar npm run dist.'}
+                ? 'Esta copia ya trae una clave puesta. Lo que escribas aquí la sustituye, solo en este navegador.'
+                : 'Tu clave se guarda únicamente en este navegador y no sale de aquí salvo para hablar con el proveedor que elijas.'}
               {preset.keyUrl && (
                 <>
                   {' '}Consigue una gratis en{' '}
@@ -204,7 +204,7 @@ export function SettingsModal({ api, onClose }: { api: GameApi; onClose: () => v
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {([
             ['images', 'Ilustrar escenas', 'Genera una imagen por escena con Pollinations (gratis, sin clave). Consume algo de datos.'],
-            ['styleRewrite', 'Reescritura de estilo', 'Segunda llamada al modelo para aplicar la voz del narrador. Más carácter, el doble de peticiones.'],
+            ['styleRewrite', 'Reescritura de estilo', 'Segunda llamada para reforzar la voz del narrador. El prompt principal ya la incluye: actívala solo si tu modelo es pequeño y no la respeta. Duplica el gasto de cuota.'],
             ['music', 'Ambiente sonoro', 'Sonido generado en tiempo real que sigue la tensión de la escena.'],
           ] as const).map(([key, title, desc]) => (
             <label key={key} style={{ display: 'flex', gap: 12, alignItems: 'flex-start', cursor: 'pointer' }}>

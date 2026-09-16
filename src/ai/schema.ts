@@ -238,6 +238,30 @@ function asSuggestions(v: unknown): string[] {
     .slice(0, 4);
 }
 
+/**
+ * Cuando el modelo se queda sin tokens devuelve JSON cortado a medias. Antes
+ * ese texto entraba tal cual en el relato, con sus llaves y sus comillas.
+ * Aquí se intenta rescatar solo el valor de `narrative`; si no hay forma, se
+ * descarta lo que huela a JSON.
+ */
+export function rescueNarrative(raw: string): string | null {
+  const limpio = raw.replace(/```(?:json)?/gi, '').trim();
+  if (!limpio) return null;
+
+  // Valor de "narrative" aunque la cadena esté sin cerrar.
+  const m = limpio.match(/"narrative"\s*:\s*"((?:[^"\\]|\\.)*)/);
+  if (m?.[1]) {
+    const texto = m[1]
+      .replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+      .trim();
+    if (texto.length > 20) return texto.slice(0, 4000);
+  }
+
+  // Sin narrative rescatable: si parece JSON, no es narración.
+  if (limpio.startsWith('{') || limpio.startsWith('[') || /"\w+"\s*:/.test(limpio)) return null;
+  return limpio.length > 20 ? limpio.slice(0, 2000) : null;
+}
+
 export interface ParseOutcome {
   result: TurnResult | null;
   /** Texto libre recuperado cuando el JSON viene roto pero hay narrativa. */
@@ -248,8 +272,7 @@ export interface ParseOutcome {
 export function parseTurn(raw: string, fallbackZone: string, known: string[] = []): ParseOutcome {
   const data = extractJson(raw);
   if (!data || typeof data !== 'object') {
-    const text = raw.replace(/```(?:json)?/gi, '').trim();
-    return { result: null, fallbackNarrative: text.length > 20 ? text.slice(0, 2000) : null };
+    return { result: null, fallbackNarrative: rescueNarrative(raw) };
   }
   const o = data as Record<string, unknown>;
   const narrative = asString(o.narrative) || asString(o.text) || asString(o.story);
@@ -292,11 +315,13 @@ export function parseTurn(raw: string, fallbackZone: string, known: string[] = [
                   .filter((c): c is string => typeof c === 'string')
                   .map((c) => c.trim().slice(0, 60))
                   .filter(Boolean)
-                  .slice(0, 4)
+                  // Dos como mucho: el mapa se llenaba de zonas fantasma.
+                  .slice(0, 2)
               : [],
           }
         : null,
       suggestions: asSuggestions(o.suggestions),
+      sheltered: typeof o.sheltered === 'boolean' ? o.sheltered : null,
       newItems,
       recipesLearned: asRecipesLearned(o.recipesLearned),
     },
@@ -353,6 +378,6 @@ export function neutralTurn(narrative: string, zone: string): TurnResult {
     timeMinutes: 10, hungerChange: 0, thirstChange: 0, sleepChange: 0, tempChange: 0,
     sceneDescription: '', location: zone,
     injuriesUpdate: [], diseasesUpdate: [], mapUpdate: null, suggestions: [],
-    newItems: [], recipesLearned: [],
+    sheltered: null, newItems: [], recipesLearned: [],
   };
 }

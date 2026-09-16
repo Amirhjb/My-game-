@@ -1,7 +1,7 @@
 import { WEATHER } from '../data/conditions';
 import { getItem, itemCategory } from '../data/items';
 import { skinItem } from '../data/genres';
-import { clockOf, dayOf, partOfDay } from '../engine/rules';
+import { clockOf, dayOf, partOfDay, pl } from '../engine/rules';
 import { currentNode, ZONE_TYPES } from '../engine/world';
 import { Block } from './ui';
 import type { GameApi } from '../hooks/useGame';
@@ -98,7 +98,7 @@ export function ContextRail({ api, onOpen }: { api: GameApi; onOpen: (id: string
         title="Mochila"
         action={
           <button className="btn btn--sm btn--ghost" onClick={() => onOpen('inventory')}>
-            {state.inventory.length} objetos →
+            {pl(state.inventory.length, 'objeto', 'objetos')} →
           </button>
         }
       >
@@ -130,7 +130,7 @@ export function ContextRail({ api, onOpen }: { api: GameApi; onOpen: (id: string
           🏚️ {state.base.established ? 'Refugio' : 'Fundar refugio'}
         </button>
         <div style={{ fontSize: 10.5, color: 'var(--text-faint)', textAlign: 'center' }}>
-          {state.stats.actions} acciones · {state.stats.zonesDiscovered} zonas
+          {pl(state.stats.actions, 'acción', 'acciones')} · {pl(state.stats.zonesDiscovered, 'zona', 'zonas')}
         </div>
       </div>
     </>

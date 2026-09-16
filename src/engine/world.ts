@@ -190,7 +190,7 @@ const GRAVITY = 0.035;    // mantiene compacto el mapa en recorridos largos
  * Es determinista: mismas posiciones de entrada, mismas de salida.
  */
 export function relaxLayout(
-  nodes: Record<string, ZoneNode>, iterations = 90,
+  nodes: Record<string, ZoneNode>, iterations = 30,
 ): Record<string, ZoneNode> {
   const names = Object.keys(nodes);
   if (names.length < 2) return nodes;
@@ -313,6 +313,9 @@ export interface MapUpdate {
   connections: string[];
 }
 
+/** Días que sobrevive una zona propuesta por el narrador si no se visita. */
+const GHOST_TTL_DAYS = 5;
+
 export function applyMapUpdate(
   map: MapState, upd: MapUpdate, day: number, rng: () => number,
 ): { map: MapState; discovered: string[] } {
@@ -351,7 +354,7 @@ export function applyMapUpdate(
     if (!conn || conn === zone) continue;
     if (!nodes[conn]) {
       const { x, y } = seedPosition(nodes, nodes[zone], rng);
-      nodes[conn] = { type: 'unknown', danger: 0, visited: false, x, y, connections: [zone] };
+      nodes[conn] = { type: 'unknown', danger: 0, visited: false, x, y, connections: [zone], discoveredDay: day };
       added = true;
     } else if (!nodes[conn].connections.includes(zone)) {
       nodes[conn].connections.push(zone);
@@ -359,9 +362,65 @@ export function applyMapUpdate(
     if (!nodes[zone].connections.includes(conn)) nodes[zone].connections.push(conn);
   }
 
-  // Solo reordenamos cuando hay algo nuevo: así el mapa no baila en cada turno.
-  const laid = added ? relaxLayout(nodes) : nodes;
+  // El mundo también se olvida: las zonas propuestas que siguen sin visitar
+  // cinco días después desaparecen, o el mapa se llena de círculos grises.
+  for (const [name, n] of Object.entries(nodes)) {
+    if (n.visited || name === zone) continue;
+    if (day - (n.discoveredDay ?? day) < GHOST_TTL_DAYS) continue;
+    if (n.connections.includes(zone)) continue;
+    delete nodes[name];
+    for (const otro of Object.values(nodes)) {
+      const i = otro.connections.indexOf(name);
+      if (i >= 0) otro.connections.splice(i, 1);
+    }
+  }
+
+  // Solo reordenamos cuando hay algo nuevo, y con menos iteraciones cuantos más
+  // nodos haya: el coste es cuadrático y bloqueaba el hilo principal.
+  const total = Object.keys(nodes).length;
+  const iteraciones = total > 160 ? 8 : total > 80 ? 15 : 30;
+  const laid = added ? relaxLayout(nodes, iteraciones) : nodes;
   return { map: { nodes: laid, currentZone: zone }, discovered };
+}
+
+/** Camino más corto entre dos zonas, en número de saltos. */
+export function shortestPath(map: MapState, from: string, to: string): string[] | null {
+  if (from === to) return [from];
+  if (!map.nodes[from] || !map.nodes[to]) return null;
+  const previo = new Map<string, string>([[from, '']]);
+  const cola = [from];
+  while (cola.length) {
+    const actual = cola.shift()!;
+    for (const vecino of map.nodes[actual]?.connections ?? []) {
+      if (previo.has(vecino) || !map.nodes[vecino]) continue;
+      previo.set(vecino, actual);
+      if (vecino === to) {
+        const camino = [to];
+        let paso = actual;
+        while (paso) { camino.unshift(paso); paso = previo.get(paso) ?? ''; }
+        return camino;
+      }
+      cola.push(vecino);
+    }
+  }
+  return null;
+}
+
+/** Saltos entre dos zonas. Si no hay camino conocido, se estima por distancia. */
+export function graphDistance(map: MapState, from: string, to: string): number {
+  const camino = shortestPath(map, from, to);
+  if (camino) return Math.max(1, camino.length - 1);
+  const a = map.nodes[from];
+  const b = map.nodes[to];
+  if (!a || !b) return 2;
+  return clamp(Math.round(Math.hypot(a.x - b.x, a.y - b.y) / 130), 1, 8);
+}
+
+/** Peligro medio de las zonas que hay que atravesar. */
+export function averageDanger(map: MapState, from: string, to: string): number {
+  const camino = shortestPath(map, from, to) ?? [from, to];
+  const valores = camino.map((n) => map.nodes[n]?.danger ?? 2);
+  return valores.reduce((a, b) => a + b, 0) / valores.length;
 }
 
 export function currentNode(map: MapState): ZoneNode | undefined {

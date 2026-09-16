@@ -57,7 +57,7 @@ export const DISEASES: Record<DiseaseId, DiseaseDef> = {
     ],
   },
   radiation: {
-    id: 'radiation', label: 'Contaminación', icon: '☢️', hue: 130, progressEvery: 12, restCures: false,
+    id: 'radiation', label: 'Contaminación', icon: '☢️', hue: 130, progressEvery: 30, restCures: false,
     cures: ['Yoduro de potasio'],
     stages: [
       { label: 'Leve',     hpPerHour: -0.8, hungerMod: -1, thirstMod: -2, sleepMod: 0,  desc: 'Náuseas y pérdida de cabello.' },
@@ -130,13 +130,13 @@ export interface StructureDef {
 export const STRUCTURES: Record<StructureId, StructureDef> = {
   cama: {
     id: 'cama', label: 'Camastro', icon: '🛏️', minutes: 120,
-    desc: 'Dormir aquí restaura mucho más sueño y algo de vida.',
-    req: { skill: 'Carpintería', level: 2 }, mats: [{ name: 'Madera', qty: 2 }, { name: 'Tela', qty: 1 }],
+    desc: 'Dormir aquí recupera bastante más sueño y algo de vida.',
+    req: { skill: 'Carpintería', level: 2 }, mats: [{ name: 'Tablones', qty: 2 }, { name: 'Tela', qty: 1 }],
   },
   almacen: {
     id: 'almacen', label: 'Almacén', icon: '📦', minutes: 180,
     desc: 'Guarda objetos sin cargarlos encima. Sin límite práctico.',
-    req: { skill: 'Carpintería', level: 3 }, mats: [{ name: 'Madera', qty: 3 }, { name: 'Herramientas básicas', qty: 1 }],
+    req: { skill: 'Carpintería', level: 3 }, mats: [{ name: 'Tablones', qty: 3 }, { name: 'Chatarra', qty: 1 }],
   },
   huerto: {
     id: 'huerto', label: 'Huerto', icon: '🌱', minutes: 180,
@@ -155,12 +155,12 @@ export const STRUCTURES: Record<StructureId, StructureDef> = {
   },
   muro: {
     id: 'muro', label: 'Muro', icon: '🧱', minutes: 300,
-    desc: 'Impide que saqueen el almacén mientras estás fuera.',
-    req: { skill: 'Albañilería', level: 3 }, mats: [{ name: 'Madera', qty: 3 }, { name: 'Chatarra', qty: 2 }],
+    desc: 'Impide que saqueen el almacén y casi anula el riesgo nocturno al dormir.',
+    req: { skill: 'Albañilería', level: 3 }, mats: [{ name: 'Tablones', qty: 3 }, { name: 'Chatarra', qty: 2 }],
   },
   generador: {
     id: 'generador', label: 'Generador', icon: '⚡', minutes: 240,
-    desc: 'Luz y energía. Reduce el riesgo nocturno y repara electrónica.',
+    desc: 'Luz toda la noche: reduce mucho el riesgo de que te sorprendan durmiendo aquí.',
     req: { skill: 'Electricidad', level: 3 }, mats: [{ name: 'Kit de reparación', qty: 1 }, { name: 'Chatarra', qty: 3 }],
   },
 };

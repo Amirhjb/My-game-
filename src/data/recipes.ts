@@ -12,6 +12,12 @@ export interface Ingredient {
   qty: number;
   /** Alternativas concretas peores: sirven, pero añaden riesgo de fallo. */
   substitutes?: { name: string; failChance: number }[];
+  /**
+   * Herramienta: hace falta tenerla, pero no se consume. Antes fabricar una
+   * lanza te dejaba sin cuchillo y una barricada destruía la caja de
+   * herramientas, que no es una decisión sino un castigo por pulsar el botón.
+   */
+  tool?: boolean;
 }
 
 /** Etiqueta legible de un ingrediente, dé lo mismo cómo esté definido. */
@@ -77,12 +83,60 @@ export const RECIPES: Recipe[] = [
     desc: 'Síntesis arriesgada de un calmante fuerte. Solo para manos expertas.',
   }),
 
+  R({
+    id: 'Yoduro de potasio',
+    ingredients: [
+      { name: 'Materiales químicos', material: 'reactivo', qty: 1 },
+      { name: 'Agua (500ml)', qty: 1 },
+    ],
+    result: { name: 'Yoduro de potasio', qty: 2 },
+    category: 'medico', skillReq: { skill: 'Primeros auxilios', level: 3 }, minutes: 45, xp: 8,
+    desc: 'Lo único que corta de raíz una contaminación por radiación.',
+  }),
+  R({
+    id: 'Carbón activado',
+    ingredients: [
+      { name: 'Madera', material: 'madera', qty: 1 },
+      { name: 'Mechero', material: 'ignicion', qty: 1, tool: true },
+    ],
+    result: { name: 'Carbón activado', qty: 2 },
+    category: 'medico', skillReq: { skill: 'Cocina', level: 2 }, minutes: 60, xp: 5,
+    desc: 'Madera quemada sin aire. Absorbe lo que no debiste comerte.',
+  }),
+  R({
+    id: 'Destilar alcohol',
+    ingredients: [
+      { name: 'Semillas variadas', qty: 1 },
+      { name: 'Chatarra', material: 'metal', qty: 1, tool: true },
+    ],
+    result: { name: 'Alcohol', qty: 1 },
+    category: 'medico', skillReq: { skill: 'Cocina', level: 3 }, minutes: 120, xp: 7,
+    desc: 'Desinfecta, arde y, en mala hora, se bebe.',
+  }),
+  R({
+    id: 'Rasgar trapos',
+    ingredients: [{ name: 'Ropa de abrigo', material: 'tela', qty: 1 }],
+    result: { name: 'Tela', qty: 3 },
+    category: 'herramienta', skillReq: null, minutes: 10, xp: 1,
+    desc: 'Cualquier prenda vieja da tela aprovechable.',
+  }),
+  R({
+    id: 'Aguja e hilo',
+    ingredients: [
+      { name: 'Chatarra', material: 'metal', qty: 1 },
+      { name: 'Cuerda (5m)', material: 'atadura', qty: 1 },
+    ],
+    result: { name: 'Aguja e hilo', qty: 1 },
+    category: 'herramienta', skillReq: { skill: 'Sastrería', level: 1 }, minutes: 25, xp: 3,
+    desc: 'Un alambre afilado y hebra deshilachada. Con eso se cose.',
+  }),
+
   // ── Armas ────────────────────────────────────────────────────────────────
   R({
     id: 'Lanza de madera',
     ingredients: [
       { name: 'Madera', material: 'madera', qty: 1 },
-      { name: 'Cuchillo', material: 'filo', qty: 1 },
+      { name: 'Cuchillo', material: 'filo', qty: 1, tool: true },
     ],
     result: { name: 'Lanza improvisada', qty: 1 },
     category: 'arma', skillReq: { skill: 'Lanza', level: 1 }, minutes: 25, xp: 4,
@@ -126,7 +180,7 @@ export const RECIPES: Recipe[] = [
       { name: 'Madera', material: 'madera', qty: 1 },
       { name: 'Tela', material: 'tela', qty: 1 },
     ],
-    result: { name: 'Mechero', qty: 1 },
+    result: { name: 'Antorcha', qty: 1 },
     category: 'herramienta', skillReq: null, minutes: 10, xp: 2,
     desc: 'Luz y calor inmediatos. Se consume rápido, pero no necesita pilas.',
   }),
@@ -144,7 +198,7 @@ export const RECIPES: Recipe[] = [
     id: 'Destilador de agua',
     ingredients: [
       { name: 'Chatarra', material: 'metal', qty: 2 },
-      { name: 'Mechero', material: 'ignicion', qty: 1 },
+      { name: 'Mechero', material: 'ignicion', qty: 1, tool: true },
     ],
     result: { name: 'Agua (500ml)', qty: 3 },
     category: 'herramienta', skillReq: { skill: 'Mecánica', level: 2 }, minutes: 90, xp: 7,
@@ -164,7 +218,7 @@ export const RECIPES: Recipe[] = [
     id: 'Kit de reparación',
     ingredients: [
       { name: 'Chatarra', material: 'metal', qty: 2 },
-      { name: 'Herramientas básicas', material: 'herramienta', qty: 1 },
+      { name: 'Herramientas básicas', material: 'herramienta', qty: 1, tool: true },
     ],
     result: { name: 'Kit de reparación', qty: 1 },
     category: 'herramienta', skillReq: { skill: 'Mecánica', level: 3 }, minutes: 60, xp: 8,
@@ -175,9 +229,9 @@ export const RECIPES: Recipe[] = [
   R({
     id: 'Ración de campo',
     ingredients: [{ name: 'Lata de comida', qty: 2 }],
-    result: { name: 'Comida enlatada x3', qty: 1 },
+    result: { name: 'Ración sellada', qty: 3 },
     category: 'comida', skillReq: { skill: 'Cocina', level: 2 }, minutes: 45, xp: 5,
-    desc: 'Dos latas se convierten en tres raciones bien selladas. Rendimiento puro.',
+    desc: 'Dos latas rinden tres raciones que además aguantan meses.',
   }),
   R({
     id: 'Caldo medicinal',
@@ -185,7 +239,7 @@ export const RECIPES: Recipe[] = [
       { name: 'Agua (500ml)', qty: 1 },
       { name: 'Semillas variadas', qty: 1 },
     ],
-    result: { name: 'Barrita energética', qty: 2 },
+    result: { name: 'Caldo caliente', qty: 2 },
     category: 'comida', skillReq: { skill: 'Cocina', level: 3 }, minutes: 40, xp: 6,
     desc: 'Nutritivo y reconfortante. Levanta a cualquiera.',
   }),
@@ -193,7 +247,7 @@ export const RECIPES: Recipe[] = [
     id: 'Carne curada',
     ingredients: [
       { name: 'Lata de comida', qty: 1 },
-      { name: 'Mechero', material: 'ignicion', qty: 1 },
+      { name: 'Mechero', material: 'ignicion', qty: 1, tool: true },
     ],
     result: { name: 'Carne curada', qty: 2 },
     category: 'comida', skillReq: { skill: 'Cocina', level: 1 }, minutes: 120, xp: 4,
@@ -203,7 +257,7 @@ export const RECIPES: Recipe[] = [
   R({
     id: 'Remendar ropa',
     ingredients: [
-      { name: 'Aguja e hilo', material: 'costura', qty: 1 },
+      { name: 'Aguja e hilo', material: 'costura', qty: 1, tool: true },
       { name: 'Tela', material: 'tela', qty: 1 },
     ],
     result: { name: 'Ropa de abrigo', qty: 1 },
@@ -216,9 +270,9 @@ export const RECIPES: Recipe[] = [
     id: 'Barricada de madera',
     ingredients: [
       { name: 'Madera', material: 'madera', qty: 2 },
-      { name: 'Herramientas básicas', material: 'herramienta', qty: 1 },
+      { name: 'Herramientas básicas', material: 'herramienta', qty: 1, tool: true },
     ],
-    result: { name: 'Madera', qty: 3 },
+    result: { name: 'Tablones', qty: 3 },
     category: 'base', skillReq: { skill: 'Carpintería', level: 2 }, minutes: 60, xp: 6,
     desc: 'Tablones cortados a medida, listos para levantar estructuras.',
   }),
@@ -244,6 +298,6 @@ export const RECIPE_CATEGORIES: Record<RecipeCategory, { label: string; icon: st
 
 /** Libros que enseñan recetas al obtenerlos. */
 export const BOOK_RECIPES: Record<string, string[]> = {
-  'Manual de medicina': ['Vendas improvisadas', 'Botiquín improvisado', 'Suero de rehidratación', 'Analgésico casero'],
+  'Manual de medicina': ['Vendas improvisadas', 'Botiquín improvisado', 'Suero de rehidratación', 'Analgésico casero', 'Yoduro de potasio', 'Carbón activado'],
   'Manual de ingeniería': ['Kit de reparación', 'Destilador de agua', 'Barricada de madera', 'Carga explosiva'],
 };

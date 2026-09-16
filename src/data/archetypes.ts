@@ -49,7 +49,7 @@ export const ARCHETYPES: Archetype[] = [
     bonuses: { 'Primeros auxilios': 4, 'Fuerza': 1 },
     penalties: { 'Puntería': -2, 'Hacha': -1 },
     items: ['Botiquín completo', 'Morfina', 'Bisturí', 'Antibióticos', 'Vendas x5', 'Mochila pequeña', 'Agua (500ml)', 'Barrita energética', 'Manual de medicina'],
-    recipes: ['Vendas improvisadas', 'Botiquín improvisado', 'Suero de rehidratación'],
+    recipes: ['Vendas improvisadas', 'Botiquín improvisado', 'Suero de rehidratación', 'Yoduro de potasio', 'Carbón activado'],
   },
   {
     id: 'engineer', icon: '🔩',
@@ -104,8 +104,8 @@ export const ARCHETYPES: Archetype[] = [
     ),
     bonuses: { 'Albañilería': 4, 'Carpintería': 3, 'Herrería': 2 },
     penalties: { 'Sigilo': -3, 'Rastreo': -1 },
-    items: ['Herramientas básicas', 'Cuerda (5m)', 'Mochila pequeña', 'Lata de comida', 'Agua (500ml)', 'Hacha de mano', 'Mechero', 'Linterna'],
-    recipes: ['Barricada de madera', 'Antorcha', 'Mochila improvisada'],
+    items: ['Herramientas básicas', 'Cuerda (5m)', 'Mochila pequeña', 'Lata de comida', 'Agua (500ml)', 'Hacha de mano', 'Mechero', 'Linterna', 'Madera'],
+    recipes: ['Barricada de madera', 'Antorcha', 'Mochila improvisada', 'Rasgar trapos'],
   },
   {
     id: 'scout', icon: '🧭',
@@ -214,10 +214,10 @@ export const ARCHETYPES: Archetype[] = [
       ['Recién salido', 'Ocho años dentro. La ciudad cambió. Él no tanto.'],
       ['Matón arrepentido', 'Trabajó para la gente equivocada demasiado tiempo.'],
     ),
-    bonuses: { 'Contundente': 3, 'Hoja corta': 3, 'Sigilo': 2 },
+    bonuses: { 'Contundente': 3, 'Hoja corta': 3, 'Sigilo': 2, 'Fuerza': 1 },
     penalties: { 'Primeros auxilios': -3, 'Cultivo': -2 },
-    items: ['Cuchillo', 'Bate de béisbol', 'Mechero', 'Agua (500ml)', 'Lata de comida', 'Vendas x5'],
-    recipes: ['Lanza de madera'],
+    items: ['Cuchillo', 'Bate de béisbol', 'Mechero', 'Agua (500ml)', 'Lata de comida', 'Vendas x5', 'Mochila pequeña', 'Trapos'],
+    recipes: ['Lanza de madera', 'Rasgar trapos'],
   },
 ];
 

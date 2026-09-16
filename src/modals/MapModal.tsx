@@ -19,10 +19,14 @@ function shorten(name: string, max = 22): string {
   return name.length > max ? `${name.slice(0, max - 1).trimEnd()}…` : name;
 }
 
-export function MapModal({ state, onClose }: { state: GameState; onClose: () => void }) {
+export function MapModal({ state, onClose, onTravel }: {
+  state: GameState; onClose: () => void; onTravel?: (zona: string) => void;
+}) {
   const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 });
   const [hover, setHover] = useState<string | null>(null);
   const drag = useRef<{ x: number; y: number; vx: number; vy: number; moved: boolean } | null>(null);
+  const viewRef = useRef(view);
+  viewRef.current = view;
   const boxRef = useRef<HTMLDivElement>(null);
 
   const nodes = useMemo(() => Object.entries(state.map.nodes), [state.map.nodes]);
@@ -36,6 +40,25 @@ export function MapModal({ state, onClose }: { state: GameState; onClose: () => 
       minX: Math.min(...xs), maxX: Math.max(...xs),
       minY: Math.min(...ys), maxY: Math.max(...ys),
     };
+  }, [nodes]);
+
+  /**
+   * Qué zona hay bajo un punto de la pantalla. Hace falta hacerlo a mano porque
+   * la captura de puntero del contenedor —necesaria para arrastrar sin que se
+   * corte— desvía el clic y nunca llega al círculo del nodo.
+   */
+  const nodeAt = useCallback((px: number, py: number): string | null => {
+    const v = viewRef.current;
+    const wx = px / v.k - v.x;
+    const wy = py / v.k - v.y;
+    // Radio generoso: en móvil se apunta con el pulgar.
+    const radio = Math.max(18, 26 / v.k);
+    let mejor: { name: string; d: number } | null = null;
+    for (const [name, n] of nodes) {
+      const d = Math.hypot(n.x - wx, n.y - wy);
+      if (d <= radio && (!mejor || d < mejor.d)) mejor = { name, d };
+    }
+    return mejor?.name ?? null;
   }, [nodes]);
 
   /** Encuadra el mapa entero dentro de la ventana. */
@@ -115,6 +138,8 @@ export function MapModal({ state, onClose }: { state: GameState; onClose: () => 
   const visited = nodes.filter(([, n]) => n.visited).length;
   // Con el mapa muy alejado, tanta etiqueta no se lee: dejamos las importantes.
   const showAllLabels = view.k > 0.5;
+  // Las vecinas directas se etiquetan siempre: son a donde puedes ir ahora.
+  const vecinas = new Set(state.map.nodes[state.map.currentZone]?.connections ?? []);
 
   return (
     <Modal
@@ -143,8 +168,13 @@ export function MapModal({ state, onClose }: { state: GameState; onClose: () => 
           setView((v) => ({ ...v, x: d.vx + dx / v.k, y: d.vy + dy / v.k }));
         }}
         onPointerUp={(e) => {
+          const d = drag.current;
           drag.current = null;
           e.currentTarget.releasePointerCapture?.(e.pointerId);
+          if (!onTravel || !d || d.moved) return;
+          const box = e.currentTarget.getBoundingClientRect();
+          const zona = nodeAt(e.clientX - box.left, e.clientY - box.top);
+          if (zona && zona !== state.map.currentZone) onTravel(zona);
         }}
         onPointerCancel={() => { drag.current = null; }}
       >
@@ -162,7 +192,7 @@ export function MapModal({ state, onClose }: { state: GameState; onClose: () => 
             {nodes.map(([name, node]) => {
               const here = name === state.map.currentZone;
               const r = (here ? 13 : node.visited ? 10 : 7) / view.k;
-              const label = here || node.isBase || showAllLabels;
+              const label = here || node.isBase || node.visited || vecinas.has(name) || showAllLabels;
               return (
                 <g
                   key={name}
@@ -181,12 +211,14 @@ export function MapModal({ state, onClose }: { state: GameState; onClose: () => 
                     fill={node.visited ? `oklch(60% 0.1 ${TYPE_HUE[node.type]} / 0.85)` : 'var(--surface-2)'}
                     stroke={here ? 'var(--accent)' : node.isBase ? 'var(--ok)' : 'var(--line-strong)'}
                     strokeWidth={(here || node.isBase ? 2.2 : 1) / view.k}
-                    style={{ cursor: 'pointer' }}
+                    style={{ cursor: onTravel && !here ? 'pointer' : 'default' }}
                   >
                     <title>
-                      {node.visited
-                        ? `${name} — ${ZONE_TYPES[node.type].label}, peligro ${node.danger}/5${node.isBase ? ' · tu refugio' : ''}`
-                        : `${name} — sin explorar`}
+                      {here
+                        ? `${name} — estás aquí`
+                        : node.visited
+                          ? `${name} — ${ZONE_TYPES[node.type].label}, peligro ${node.danger}/5${node.isBase ? ' · tu refugio' : ''}. Pulsa para viajar.`
+                          : `${name} — sin explorar. Pulsa para ir.`}
                     </title>
                   </circle>
                   {node.isBase && (
@@ -220,7 +252,9 @@ export function MapModal({ state, onClose }: { state: GameState; onClose: () => 
           </g>
         </svg>
 
-        <div className="mapview__hint">Arrastra para mover · rueda para acercar</div>
+        <div className="mapview__hint">
+          {onTravel ? 'Pulsa una zona para viajar · arrastra para mover' : 'Arrastra para mover · rueda para acercar'}
+        </div>
         <div className="mapview__zoom">
           <button className="btn btn--sm" onClick={fitAll} title="Ver el mapa entero">Ajustar</button>
           <button className="btn btn--sm" onClick={centerOnPlayer} title="Centrar en donde estás">Aquí</button>

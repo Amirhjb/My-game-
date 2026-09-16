@@ -60,9 +60,9 @@ export function StatusRail({ state }: { state: GameState }) {
               }}
             />
           </div>
-          <Meter label="Hambre" icon="🍖" value={state.needs.hunger} />
-          <Meter label="Sed" icon="💧" value={state.needs.thirst} />
-          <Meter label="Sueño" icon="😴" value={state.needs.sleep} />
+          <Meter label="Hambre" icon="🍖" value={state.needs.hunger} critAt={20} warnAt={50} color="var(--ok)" />
+          <Meter label="Sed" icon="💧" value={state.needs.thirst} critAt={20} warnAt={50} color="var(--ok)" />
+          <Meter label="Sueño" icon="😴" value={state.needs.sleep} critAt={20} warnAt={50} color="var(--ok)" />
           <Temperature value={state.needs.temp} />
         </div>
       </Block>

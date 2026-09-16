@@ -122,6 +122,12 @@ interfaz, que deriva de un único tono OKLCH por género.
   alguien que te lo explica, probar hasta que sale.
 - **Refugio** con 7 construcciones: camastro, almacén, huerto, recogida de agua, taller,
   muro y generador. Producen recursos mientras estás fuera; sin muro, te lo saquean.
+- **Dormir de verdad**: eliges las horas y el motor resuelve la noche entera — recupera
+  sueño según dónde duermas, avanza enfermedades y heridas, y tira el riesgo nocturno según
+  el peligro de la zona y lo que hayas construido. El camastro y el muro sirven para esto.
+- **Tiradas de habilidad visibles**: cuando la acción implica una habilidad, el motor tira
+  `d20 + nivel` contra la dificultad de la zona, lo muestra en el registro y le dice al
+  modelo qué tiene que narrar. El modelo cuenta el cómo; el resultado ya está decidido.
 - **Mapa procedural** navegable con zonas conectadas, tipos y nivel de peligro. El trazado
   es un relajado de fuerzas: las zonas conectadas se atraen, todas se repelen y una gravedad
   suave mantiene el conjunto compacto, así que sigue cabiendo en pantalla con 60 zonas.

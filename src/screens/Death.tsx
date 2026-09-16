@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { archetypeName } from '../data/archetypes';
 import { GENRES } from '../data/genres';
-import { dayOf } from '../engine/rules';
+import { dayOf, pl } from '../engine/rules';
 import { exportSave } from '../persistence/saves';
+import { SavesModal } from '../modals/SavesModal';
 import type { GameApi } from '../hooks/useGame';
 
 function Stat({ label, value }: { label: string; value: string | number }) {
@@ -17,6 +18,7 @@ function Stat({ label, value }: { label: string; value: string | number }) {
 export function Death({ api }: { api: GameApi }) {
   const { state, dispatch } = api;
   const [visible, setVisible] = useState(false);
+  const [saves, setSaves] = useState(false);
   useEffect(() => { const t = setTimeout(() => setVisible(true), 400); return () => clearTimeout(t); }, []);
 
   const lastWords = [...state.log].reverse().find((e) => e.kind === 'story');
@@ -54,17 +56,17 @@ export function Death({ api }: { api: GameApi }) {
           className="card"
           style={{ padding: 20, marginBottom: 26, display: 'grid', gap: 18, gridTemplateColumns: 'repeat(3, 1fr)' }}
         >
-          <Stat label="Días" value={state.stats.daysSurvived} />
-          <Stat label="Acciones" value={state.stats.actions} />
-          <Stat label="Zonas" value={state.stats.zonesDiscovered} />
-          <Stat label="Fabricados" value={state.stats.itemsCrafted} />
-          <Stat label="Niveles" value={state.stats.levelsGained} />
-          <Stat label="Fotos" value={state.stats.photosTaken} />
+          <Stat label={state.stats.daysSurvived === 1 ? 'Día' : 'Días'} value={state.stats.daysSurvived} />
+          <Stat label={state.stats.actions === 1 ? 'Acción' : 'Acciones'} value={state.stats.actions} />
+          <Stat label={state.stats.zonesDiscovered === 1 ? 'Zona' : 'Zonas'} value={state.stats.zonesDiscovered} />
+          <Stat label={state.stats.itemsCrafted === 1 ? 'Fabricado' : 'Fabricados'} value={state.stats.itemsCrafted} />
+          <Stat label={state.stats.levelsGained === 1 ? 'Nivel' : 'Niveles'} value={state.stats.levelsGained} />
+          <Stat label={state.stats.photosTaken === 1 ? 'Foto' : 'Fotos'} value={state.stats.photosTaken} />
         </div>
 
         {(state.diary.length > 0 || state.photos.length > 0) && (
           <p style={{ fontSize: 12.5, color: 'var(--text-dim)', textAlign: 'center', marginBottom: 22, lineHeight: 1.6 }}>
-            Quedan {state.diary.length} entrada(s) de diario y {state.photos.length} fotografía(s).
+            Quedan {pl(state.diary.length, 'entrada', 'entradas')} de diario y {pl(state.photos.length, 'fotografía', 'fotografías')}.
             Exporta la partida si quieres conservarlas.
           </p>
         )}
@@ -75,12 +77,16 @@ export function Death({ api }: { api: GameApi }) {
         >
           Empezar de nuevo
         </button>
-        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-          <button className="btn btn--ghost" style={{ flex: 1 }} onClick={() => exportSave(state)}>
+        <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+          <button className="btn btn--ghost" style={{ flex: 1, minWidth: 160 }} onClick={() => setSaves(true)}>
+            💾 Cargar otra partida
+          </button>
+          <button className="btn btn--ghost" style={{ flex: 1, minWidth: 160 }} onClick={() => exportSave(state)}>
             ⬇ Exportar este relato
           </button>
         </div>
       </div>
+      {saves && <SavesModal api={api} onClose={() => setSaves(false)} />}
     </div>
   );
 }

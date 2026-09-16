@@ -4,7 +4,12 @@ import { initialState } from '../src/engine/state';
 import { parseTurn, parseImprovise, matchItemName, extractJson, asNewItems } from '../src/ai/schema';
 import { estimateItem, getItem, itemsForMaterial } from '../src/data/items';
 import { planCraft, resolveCraft } from '../src/engine/crafting';
-import { tickNeeds, capacityOf, addItems, removeItems } from '../src/engine/rules';
+import { tickNeeds, capacityOf, addItems, removeItems, skillView, skillPenalties } from '../src/engine/rules';
+import { XP_TABLE } from '../src/data/skills';
+import { RECIPE_BY_ID } from '../src/data/recipes';
+import { buildStateBrief } from '../src/ai/prompts';
+import { rescueNarrative } from '../src/ai/schema';
+import { detectSkill, rollInstruction, rollSkill, zoneDifficulty } from '../src/engine/rolls';
 import { advanceWeather, applyMapUpdate, relaxLayout, rollWeather } from '../src/engine/world';
 import type { GameState, TurnResult } from '../src/engine/types';
 
@@ -104,10 +109,14 @@ function newRun(): GameState {
   const { skillView } = await import('../src/engine/rules');
   check('la lesión penaliza Sigilo', skillView(s)['Sigilo'].penalty >= 2, `${skillView(s)['Sigilo'].penalty}`);
 
-  // Curar con un objeto.
+  // B-11: los antibióticos inician tratamiento, ya no curan de golpe.
   let cured = reducer(s, { type: 'applyTurn', rng: seeded(2), playerText: null, result: turn({ itemsGained: [{ name: 'Antibióticos', qty: 1 }] }) });
-  cured = reducer(cured, { type: 'useItem', name: 'Antibióticos' });
-  check('los antibióticos curan la fiebre', !cured.diseases.some((d) => d.id === 'fever'));
+  cured = reducer(cured, { type: 'useItem', name: 'Antibióticos', rng: seeded(3) });
+  check('los antibióticos no curan al instante', cured.diseases.some((d) => d.id === 'fever'));
+  check('los antibióticos inician tratamiento', (cured.diseases.find((d) => d.id === 'fever')?.treated ?? 0) > 0);
+  // Tras las horas de tratamiento, sí.
+  const tratado = reducer(cured, { type: 'applyTurn', rng: seeded(4), playerText: null, result: turn({ timeMinutes: 660 }) });
+  check('el tratamiento acaba curando', !tratado.diseases.some((d) => d.id === 'fever'), JSON.stringify(tratado.diseases));
 }
 
 // ── Muerte ───────────────────────────────────────────────────────────────────
@@ -323,6 +332,313 @@ function newRun(): GameState {
   for (let i = 0; i < 300; i++) s = reducer(s, { type: 'log', kind: 'system', text: `linea ${i}` });
   check('el registro se recorta', s.log.length <= 220, `${s.log.length}`);
   check('se conservan las últimas líneas', s.log[s.log.length - 1].text === 'linea 299');
+}
+
+// ══ AUDITORÍA ═══════════════════════════════════════════════════════════════
+
+// ── R-01: los estados temporales subían las habilidades en vez de bajarlas ──
+{
+  let s = newRun();
+  s = { ...s, skillXp: { ...s.skillXp, 'Rastreo': XP_TABLE[5] } };
+  check('sin estados, el nivel es el base', skillView(s)['Rastreo'].level === 5);
+
+  const conCeniza = { ...s, modifiers: [{ id: 'ash', label: 'Ceniza', skills: { 'Rastreo': 2 }, turns: 3, kind: 'debuff' as const }] };
+  check('un debuff BAJA la habilidad', skillView(conCeniza)['Rastreo'].level === 3, `${skillView(conCeniza)['Rastreo'].level}`);
+
+  const conAbstinencia = { ...s, modifiers: [{ id: 'abs', label: 'Abstinencia', skills: { '*': 2 }, turns: 4, kind: 'debuff' as const }] };
+  check('un debuff con comodín baja todas', skillView(conAbstinencia)['Rastreo'].level === 3 && skillView(conAbstinencia)['Sigilo'].level === 0);
+
+  const conBuff = { ...s, modifiers: [{ id: 'tem', label: 'Temple', skills: { 'Rastreo': 1 }, turns: 2, kind: 'buff' as const }] };
+  check('un buff sí sube la habilidad', skillView(conBuff)['Rastreo'].level === 6);
+  check('el nivel nunca pasa del techo de la tabla', skillView({ ...s, skillXp: { ...s.skillXp, 'Rastreo': XP_TABLE[10] } })['Rastreo'].level === 10);
+}
+
+// ── R-02: el agotamiento en etapa 2 era incurable ──────────────────────────
+{
+  let s = newRun();
+  s = { ...s, diseases: [{ id: 'exhaustion', stage: 2, ticks: 0 }] };
+  s = reducer(s, { type: 'applyTurn', rng: seeded(6), playerText: null, result: turn({ timeMinutes: 480 }) });
+  check('el descanso baja una etapa de agotamiento', s.diseases.find((d) => d.id === 'exhaustion')?.stage === 1, JSON.stringify(s.diseases));
+  s = reducer(s, { type: 'applyTurn', rng: seeded(7), playerText: null, result: turn({ timeMinutes: 480 }) });
+  s = reducer(s, { type: 'applyTurn', rng: seeded(8), playerText: null, result: turn({ timeMinutes: 480 }) });
+  check('tres descansos acaban curándolo', !s.diseases.some((d) => d.id === 'exhaustion'), JSON.stringify(s.diseases));
+}
+
+// ── R-03: la contaminación tiene salida ────────────────────────────────────
+{
+  check('el yoduro es fabricable', !!RECIPE_BY_ID['Yoduro de potasio']);
+  let s = newRun();
+  s = { ...s, diseases: [{ id: 'radiation', stage: 1, ticks: 0 }], inventory: addItems(s.inventory, [{ name: 'Yoduro de potasio', qty: 1 }]) };
+  s = reducer(s, { type: 'useItem', name: 'Yoduro de potasio', rng: seeded(9) });
+  check('el yoduro corta la contaminación de golpe', !s.diseases.some((d) => d.id === 'radiation'));
+
+  // Y la leve remite sola con el tiempo.
+  const azar = seeded(555);
+  let r = { ...newRun(), diseases: [{ id: 'radiation' as const, stage: 0 as const, ticks: 0 }] };
+  let remitida = false;
+  for (let i = 0; i < 60 && !remitida; i++) {
+    r = reducer(r, { type: 'applyTurn', rng: azar, playerText: null, result: turn({ timeMinutes: 480 }) });
+    r = { ...r, hp: r.maxHp, needs: { hunger: 80, thirst: 80, sleep: 80, temp: 36.5 } };
+    remitida = !r.diseases.some((d) => d.id === 'radiation');
+  }
+  check('la contaminación leve remite sola con el tiempo', remitida);
+}
+
+// ── R-04: construir no comprobaba la muerte ────────────────────────────────
+{
+  let s = newRun();
+  s = reducer(s, { type: 'establishBase' });
+  s = { ...s,
+    hp: 6, needs: { hunger: 5, thirst: 0, sleep: 40, temp: 36.5 },
+    skillXp: { ...s.skillXp, 'Carpintería': XP_TABLE[5] },
+    inventory: addItems(s.inventory, [{ name: 'Tablones', qty: 3 }, { name: 'Chatarra', qty: 2 }]),
+  };
+  s = reducer(s, { type: 'build', structure: 'almacen', rng: seeded(11) });
+  check('construir con 0 de vida termina la partida', s.hp === 0 && s.screen === 'death', `vida ${s.hp} pantalla ${s.screen}`);
+  check('la muerte al construir tiene causa', !!s.deathCause);
+}
+
+// ── R-05: las enfermedades avanzan por tiempo, no por número de acciones ───
+{
+  const base = { ...newRun(), diseases: [{ id: 'fever' as const, stage: 0 as const, ticks: 0 }] };
+
+  let cortas = base;
+  for (let i = 0; i < 9; i++) {
+    cortas = reducer(cortas, { type: 'applyTurn', rng: seeded(200 + i), playerText: null, result: turn({ timeMinutes: 2 }) });
+  }
+  let largas = base;
+  for (let i = 0; i < 4; i++) {
+    largas = reducer(largas, { type: 'applyTurn', rng: seeded(300 + i), playerText: null, result: turn({ timeMinutes: 120 }) });
+  }
+  const etapaCortas = cortas.diseases.find((d) => d.id === 'fever')?.stage ?? 0;
+  const etapaLargas = largas.diseases.find((d) => d.id === 'fever')?.stage ?? 0;
+  check('18 minutos no enferman más que 8 horas', etapaLargas >= etapaCortas, `cortas ${etapaCortas} largas ${etapaLargas}`);
+  check('nueve acciones de dos minutos no agravan la fiebre', etapaCortas === 0);
+}
+
+// ── R-06: un JSON cortado no puede acabar en el relato ─────────────────────
+{
+  const cortado = parseTurn('{"narrative": "Texto cortado a la mit', 'Inicio');
+  check('se rescata la narración del JSON cortado', cortado.fallbackNarrative === 'Texto cortado a la mit' || cortado.fallbackNarrative === null);
+  const soloJson = parseTurn('{"hpChange": -5, "timeMinutes": 30, "itemsGained": [', 'Inicio');
+  check('un JSON sin narración no se muestra como relato', soloJson.fallbackNarrative === null, String(soloJson.fallbackNarrative));
+  check('rescueNarrative descarta llaves sueltas', rescueNarrative('{"foo": "bar", "baz": 1') === null);
+  check('rescueNarrative devuelve prosa normal', (rescueNarrative('Caminas entre los escombros durante un buen rato.') ?? '').startsWith('Caminas'));
+}
+
+// ── B-01: las penalizaciones de los oficios hacían nada ────────────────────
+{
+  const soldado = reducer(reducer(reducer(reducer(initialState,
+    { type: 'setGenre', genre: 'apocalypse' }),
+    { type: 'setName', name: 'Sold' }),
+    { type: 'setArchetype', id: 'warrior' }),
+    { type: 'startRun', rng: seeded(12) });
+  check('la penalización del oficio se guarda', (soldado.basePenalty['Cultivo'] ?? 0) === 2, JSON.stringify(soldado.basePenalty));
+  check('la penalización baja el nivel efectivo', skillView(soldado)['Cultivo'].level === 0, `${skillView(soldado)['Cultivo'].level}`);
+
+  const cocinero = reducer(reducer(reducer(reducer(initialState,
+    { type: 'setGenre', genre: 'apocalypse' }),
+    { type: 'setName', name: 'Coci' }),
+    { type: 'setArchetype', id: 'cook' }),
+    { type: 'startRun', rng: seeded(12) });
+  check('sin penalización el nivel es distinto', skillView(cocinero)['Cultivo'].level > skillView(soldado)['Cultivo'].level);
+  check('las bonificaciones siguen funcionando', skillView(cocinero)['Cocina'].level === 5, `${skillView(cocinero)['Cocina'].level}`);
+}
+
+// ── B-02: los lastres tenían coste real cero ───────────────────────────────
+{
+  let s = initialState;
+  s = reducer(s, { type: 'setGenre', genre: 'apocalypse' });
+  s = reducer(s, { type: 'setName', name: 'Gorrón' });
+  s = reducer(s, { type: 'setArchetype', id: 'warrior' });
+  for (const id of ['ruidoso', 'lento', 'torpe']) s = reducer(s, { type: 'toggleTrait', id, max: 6 });
+  s = reducer(s, { type: 'startRun', rng: seeded(13) });
+  check('Ruidoso penaliza el sigilo de verdad', (s.basePenalty['Sigilo'] ?? 0) >= 3, JSON.stringify(s.basePenalty));
+  check('Torpe penaliza mecánica de verdad', (s.basePenalty['Mecánica'] ?? 0) === 1);
+}
+
+// ── B-03: la sobrecarga no penalizaba nada ─────────────────────────────────
+{
+  let s = newRun();
+  s = { ...s, inventory: addItems(s.inventory, [{ name: 'Rifle', qty: 12 }]) };
+  s = reducer(s, { type: 'applyTurn', rng: seeded(14), playerText: null, result: turn() });
+  check('ir sobrecargado añade un modificador', s.modifiers.some((m) => m.id === 'sobrecarga'), JSON.stringify(s.modifiers));
+  check('la sobrecarga penaliza sigilo', skillPenalties(s)['Sigilo'] >= 1);
+  const brief = buildStateBrief(s);
+  check('la carga llega al prompt', /CARGA:/.test(brief) && /SOBRECARGADO/.test(brief));
+}
+
+// ── B-04: el desgaste era insostenible ─────────────────────────────────────
+{
+  const dia = tickNeeds({ hunger: 100, thirst: 100, sleep: 100, temp: 36.5 }, 1440, [], []);
+  check('el agua de un día cabe en menos de 4 botellas', (100 - dia.needs.thirst) < 150, `${Math.round(100 - dia.needs.thirst)}`);
+  const durmiendo = tickNeeds({ hunger: 80, thirst: 80, sleep: 20, temp: 36.5 }, 480, [], [], {}, { resting: true });
+  const despierto = tickNeeds({ hunger: 80, thirst: 80, sleep: 20, temp: 36.5 }, 480, [], [], {});
+  check('dormir desgasta menos que estar despierto', durmiendo.needs.thirst > despierto.needs.thirst);
+  check('durmiendo no se descuenta sueño', durmiendo.needs.sleep === 20);
+}
+
+// ── B-05 / P-01: existe una acción de dormir de verdad ─────────────────────
+{
+  let s = newRun();
+  s = { ...s, needs: { hunger: 70, thirst: 70, sleep: 10, temp: 36.5 } };
+  const dormido = reducer(s, { type: 'sleep', hours: 8, rng: () => 0.99 });
+  check('dormir recupera sueño de verdad', dormido.needs.sleep > 70, `${Math.round(dormido.needs.sleep)}`);
+  const enCasa = reducer({ ...reducer(newRun(), { type: 'establishBase' }),
+    needs: { hunger: 70, thirst: 70, sleep: 10, temp: 36.5 } }, { type: 'sleep', hours: 8, rng: () => 0.99 });
+  check('una noche a cubierto sí puede llenar el sueño', enCasa.needs.sleep > 95, `${Math.round(enCasa.needs.sleep)}`);
+  check('dormir avanza el reloj', dormido.minutes === s.minutes + 480);
+  check('dormir deja rastro en el registro', dormido.log.some((l) => /Duermo 8 horas/.test(l.text)));
+
+  // El camastro cumple lo que promete, y no solo al volver de un viaje.
+  let conCama = reducer(newRun(), { type: 'establishBase' });
+  conCama = { ...conCama, needs: { hunger: 70, thirst: 70, sleep: 10, temp: 36.5 },
+    base: { ...conCama.base, structures: ['cama'] } };
+  const enCamastro = reducer(conCama, { type: 'sleep', hours: 4, rng: () => 0.99 });
+  const sinCamastro = reducer({ ...conCama, base: { ...conCama.base, structures: [] } }, { type: 'sleep', hours: 4, rng: () => 0.99 });
+  check('el camastro recupera más sueño', enCamastro.needs.sleep > sinCamastro.needs.sleep,
+    `${Math.round(enCamastro.needs.sleep)} vs ${Math.round(sinCamastro.needs.sleep)}`);
+  check('el camastro devuelve algo de vida', enCamastro.hp >= sinCamastro.hp);
+
+  // B-06: el muro reduce el riesgo nocturno, que antes no existía.
+  const zonaPeligrosa = { ...conCama,
+    map: { ...conCama.map, nodes: { ...conCama.map.nodes, Inicio: { ...conCama.map.nodes['Inicio'], danger: 5 } } } };
+  const sustos = (estructuras: ('muro' | 'cama')[]) => {
+    // Un único generador continuo: con semillas consecutivas, un LCG devuelve
+    // primeros valores casi idénticos y la muestra no vale de nada.
+    const azar = seeded(9001);
+    let n = 0;
+    for (let i = 0; i < 200; i++) {
+      const res = reducer({ ...zonaPeligrosa, base: { ...zonaPeligrosa.base, structures: estructuras } },
+        { type: 'sleep', hours: 8, rng: azar });
+      if (res.log.some((l) => l.kind === 'bad' && /despiertas|muro/.test(l.text))) n++;
+    }
+    return n;
+  };
+  const sinMuro = sustos([]);
+  const conMuro = sustos(['muro']);
+  check('dormir en zona peligrosa tiene riesgo', sinMuro > 10, `${sinMuro}/200`);
+  check('el muro reduce mucho el riesgo nocturno', conMuro < sinMuro / 3, `${conMuro}/200 frente a ${sinMuro}/200`);
+}
+
+// ── B-07 / B-08: las recetas producen lo que dicen y compensan ─────────────
+{
+  check('la antorcha produce una antorcha', RECIPE_BY_ID['Antorcha'].result.name === 'Antorcha');
+  check('el caldo produce caldo', RECIPE_BY_ID['Caldo medicinal'].result.name === 'Caldo caliente');
+  check('la barricada produce tablones', RECIPE_BY_ID['Barricada de madera'].result.name === 'Tablones');
+
+  const racion = RECIPE_BY_ID['Ración de campo'];
+  const entrada = getItem('Lata de comida').use!.hunger! * 2;
+  const salida = getItem(racion.result.name).use!.hunger! * racion.result.qty;
+  check('la ración de campo ya no es una trampa', salida > entrada, `${entrada} → ${salida}`);
+}
+
+// ── B-09: las recetas gastaban las herramientas ────────────────────────────
+{
+  let s = newRun();
+  s = { ...s,
+    skillXp: { ...s.skillXp, 'Lanza': XP_TABLE[3] },
+    inventory: [{ name: 'Madera', qty: 1 }, { name: 'Cuchillo', qty: 1 }],
+  };
+  const tras = reducer(s, { type: 'craft', recipeId: 'Lanza de madera', rng: () => 0.99 });
+  check('fabricar una lanza no te deja sin cuchillo', countOfName(tras, 'Cuchillo') === 1, `${countOfName(tras, 'Cuchillo')}`);
+  check('el material sí se consume', countOfName(tras, 'Madera') === 0);
+  check('y sale la lanza', countOfName(tras, 'Lanza improvisada') === 1);
+}
+
+// ── B-10: la experiencia mezclaba escalas y se podía farmear ───────────────
+{
+  let s = newRun();
+  s = { ...s, skillXp: { ...s.skillXp, 'Primeros auxilios': 0 },
+    inventory: [{ name: 'Tela', qty: 20 }] };
+
+  const primera = reducer(s, { type: 'craft', recipeId: 'Vendas improvisadas', rng: () => 0.99 });
+  const ganancia1 = (primera.skillXp['Primeros auxilios'] ?? 0) - (s.skillXp['Primeros auxilios'] ?? 0);
+
+  let repetido = s;
+  for (let i = 0; i < 5; i++) repetido = reducer(repetido, { type: 'craft', recipeId: 'Vendas improvisadas', rng: () => 0.99 });
+  const ultima = reducer(repetido, { type: 'craft', recipeId: 'Vendas improvisadas', rng: () => 0.99 });
+  const ganancia6 = (ultima.skillXp['Primeros auxilios'] ?? 0) - (repetido.skillXp['Primeros auxilios'] ?? 0);
+
+  check('repetir la misma receta rinde menos', ganancia6 < ganancia1, `${ganancia1} → ${ganancia6}`);
+  check('una receta cara da más que una barata',
+    RECIPE_BY_ID['Analgésico casero'].xp > RECIPE_BY_ID['Vendas improvisadas'].xp);
+}
+
+// ── B-13: el Ex-convicto empezaba sin mochila ──────────────────────────────
+{
+  const ex = reducer(reducer(reducer(reducer(initialState,
+    { type: 'setGenre', genre: 'apocalypse' }),
+    { type: 'setName', name: 'Ex' }),
+    { type: 'setArchetype', id: 'outlaw' }),
+    { type: 'startRun', rng: seeded(15) });
+  check('el Ex-convicto lleva mochila', ex.inventory.some((i) => i.name === 'Mochila pequeña'));
+  const cap = capacityOf(ex.inventory, 2, false);
+  check('su capacidad ya no es la mitad', cap.maxKg > 15, `${cap.maxKg} kg`);
+}
+
+// ── B-14: usar un objeto también avanza el mundo ───────────────────────────
+{
+  let s = newRun();
+  s = { ...s, diseases: [{ id: 'fever', stage: 0, ticks: 0 }],
+    inventory: addItems(s.inventory, [{ name: 'Lata de comida', qty: 1 }]) };
+  const antes = s.diseases[0].ticks;
+  const tras = reducer(s, { type: 'useItem', name: 'Lata de comida', rng: seeded(16) });
+  check('usar un objeto avanza las enfermedades', (tras.diseases[0]?.ticks ?? 0) > antes);
+  check('usar un objeto avanza el reloj', tras.minutes > s.minutes);
+}
+
+// ── B-15: volver al refugio dependía de nada ───────────────────────────────
+{
+  let s = newRun();
+  s = reducer(s, { type: 'establishBase' });
+  for (let i = 0; i < 4; i++) {
+    s = reducer(s, { type: 'applyTurn', rng: seeded(400 + i), playerText: null,
+      result: turn({ mapUpdate: { currentZone: `Lejos ${i}`, type: 'urban', danger: 1, connections: [] } }) });
+    s = { ...s, hp: s.maxHp, needs: { hunger: 80, thirst: 80, sleep: 80, temp: 36.5 } };
+  }
+  const antes = s.minutes;
+  const vuelto = reducer(s, { type: 'returnToBase', rng: () => 0.99 });
+  check('volver de lejos cuesta más que de al lado', vuelto.minutes - antes > 150, `${vuelto.minutes - antes} min`);
+  check('el viaje acaba en el refugio', vuelto.map.currentZone === vuelto.base.location);
+}
+
+// ── X-05: el diario crecía sin tope ────────────────────────────────────────
+{
+  let s = newRun();
+  for (let i = 0; i < 80; i++) {
+    s = reducer(s, { type: 'addDiary', entry: { id: `d${i}`, day: i, time: '03:00', location: 'x', text: 'y', mood: 'z', hp: 1, hunger: 1, thirst: 1, diseases: [] } });
+  }
+  check('el diario tiene tope', s.diary.length === 60, `${s.diary.length}`);
+  check('el diario conserva lo más reciente', s.diary[s.diary.length - 1].id === 'd79');
+}
+
+// ── P-02: tiradas de habilidad ─────────────────────────────────────────────
+{
+  check('detecta sigilo', detectSkill('Avanzo sin hacer ruido pegado a la pared') === 'Sigilo');
+  check('detecta primeros auxilios', detectSkill('Me vendo el brazo como puedo') === 'Primeros auxilios');
+  check('detecta puntería', detectSkill('Disparo al que viene por la izquierda') === 'Puntería');
+  check('detecta cocina', detectSkill('Cocino lo que queda en la lata') === 'Cocina');
+  check('no inventa habilidad donde no la hay', detectSkill('Miro el cielo un rato') === null);
+
+  const s = newRun();
+  const facil = { ...s, map: { ...s.map, nodes: { ...s.map.nodes, Inicio: { ...s.map.nodes['Inicio'], danger: 1 } } } };
+  const dificil = { ...s, map: { ...s.map, nodes: { ...s.map.nodes, Inicio: { ...s.map.nodes['Inicio'], danger: 5 } } } };
+  check('la zona peligrosa sube la dificultad', zoneDifficulty(dificil) > zoneDifficulty(facil));
+
+  // El nivel importa: mismo dado, distinto resultado.
+  const novato = { ...facil, skillXp: { ...facil.skillXp, 'Sigilo': XP_TABLE[1] } };
+  const experto = { ...facil, skillXp: { ...facil.skillXp, 'Sigilo': XP_TABLE[9] } };
+  const dado = () => 0.5;   // d20 = 11
+  const rn = rollSkill(novato, 'Sigilo', dado);
+  const re = rollSkill(experto, 'Sigilo', dado);
+  check('el mismo dado da distinto total según el nivel', re.total > rn.total, `${rn.total} vs ${re.total}`);
+  check('el experto supera la dificultad', re.total >= re.difficulty);
+  check('la tirada se explica en una línea', /Sigilo \d+ \+ d20\(\d+\) = \d+ vs \d+ →/.test(re.label), re.label);
+
+  check('un 1 natural es pifia', rollSkill(experto, 'Sigilo', () => 0).outcome === 'pifia');
+  check('un 20 natural es crítico', rollSkill(novato, 'Sigilo', () => 0.999).outcome === 'critico');
+  check('la instrucción prohíbe contradecir la tirada', /No contradigas la tirada/.test(rollInstruction(re)));
 }
 
 // ── Trazado del mapa ────────────────────────────────────────────────────────

@@ -21,6 +21,9 @@ function Entry({ entry }: { entry: LogEntry }) {
   if (entry.kind === 'player') {
     return <div className="entry entry--player">{entry.text}</div>;
   }
+  if (entry.kind === 'roll') {
+    return <div className="entry entry--roll"><span aria-hidden>🎲</span>{entry.text}</div>;
+  }
   return (
     <div className="entry entry--note" data-kind={entry.kind}>
       <span aria-hidden>{NOTE_ICON[entry.kind] ?? '·'}</span>
@@ -76,9 +79,14 @@ export function Story({ api }: { api: GameApi }) {
   }
 
   return (
-    <div className="main">
+    <main className="main">
+      {/* Sin esto, con lector de pantalla no hay forma de saber que ha llegado
+          la narración: es un juego que consiste en leer texto asíncrono. */}
+      <div role="status" aria-live="polite" className="u-sr">
+        {busy ? 'El narrador está escribiendo…' : error ? `Error: ${error}` : ''}
+      </div>
       <div className="story" ref={scrollRef} onScroll={onScroll}>
-        <div className="story__inner">
+        <div className="story__inner" aria-live="polite" aria-relevant="additions text">
           {rendered}
 
           {busy && (
@@ -150,7 +158,7 @@ export function Story({ api }: { api: GameApi }) {
           <div className="compose__hint">Intro para enviar · Mayús+Intro para salto de línea</div>
         </div>
       </div>
-    </div>
+    </main>
   );
 }
 
