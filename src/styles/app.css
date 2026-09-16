@@ -303,6 +303,10 @@
   aspect-ratio: 12 / 7;
 }
 .scene img { width: 100%; height: 100%; object-fit: cover; animation: fade-in var(--dur-3) var(--ease); }
+/* Sustituto compacto de la caja de escena cuando no hay ilustración. */
+.place { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.place__name { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .scene__empty {
   position: absolute; inset: 0; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 8px;

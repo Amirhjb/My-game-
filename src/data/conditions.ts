@@ -149,7 +149,7 @@ export const STRUCTURES: Record<StructureId, StructureDef> = {
     req: { skill: 'Albañilería', level: 2 }, mats: [{ name: 'Chatarra', qty: 2 }, { name: 'Tela', qty: 1 }],
   },
   taller: {
-    id: 'taller', label: 'Taller', icon: '🔧', minutes: 240,
+    id: 'taller', label: 'Taller', icon: '🛠️', minutes: 240,
     desc: 'Craftear en el refugio cuesta un 40 % menos de tiempo y falla menos.',
     req: { skill: 'Mecánica', level: 3 }, mats: [{ name: 'Herramientas básicas', qty: 1 }, { name: 'Chatarra', qty: 3 }],
   },

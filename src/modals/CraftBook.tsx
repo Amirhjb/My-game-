@@ -73,7 +73,7 @@ export function CraftBook({ api, onClose }: { api: GameApi; onClose: () => void 
   return (
     <Modal
       title="Manual de fabricación"
-      icon="🔧"
+      icon="🔨"
       onClose={onClose}
       subtitle={<span>{state.knownRecipes.length} conocidas · {unknown} por descubrir</span>}
       wide
@@ -82,7 +82,7 @@ export function CraftBook({ api, onClose }: { api: GameApi; onClose: () => void 
 
       {workshop && (
         <div className="notice notice--info" style={{ marginBottom: 16 }}>
-          <span aria-hidden>🔧</span>
+          <span aria-hidden>🛠️</span>
           <span>Estás en el taller del refugio: fabricar cuesta un 40 % menos de tiempo y los sustitutos fallan la mitad.</span>
         </div>
       )}

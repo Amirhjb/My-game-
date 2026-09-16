@@ -10,7 +10,7 @@ export interface SkillCategory {
 export const SKILL_TREE: SkillCategory[] = [
   { id: 'ranged',   label: 'Combate a distancia', icon: '🎯', skills: ['Puntería', 'Recarga'] },
   { id: 'melee',    label: 'Cuerpo a cuerpo',     icon: '🗡️', skills: ['Hacha', 'Hoja larga', 'Contundente', 'Hoja corta', 'Lanza'] },
-  { id: 'craft',    label: 'Oficios',             icon: '🔧', skills: ['Carpintería', 'Cocina', 'Electricidad', 'Herrería', 'Albañilería', 'Mecánica', 'Sastrería'] },
+  { id: 'craft',    label: 'Oficios',             icon: '⚙️', skills: ['Carpintería', 'Cocina', 'Electricidad', 'Herrería', 'Albañilería', 'Mecánica', 'Sastrería'] },
   { id: 'farm',     label: 'Subsistencia',        icon: '🌱', skills: ['Cultivo', 'Cría de animales', 'Fuerza'] },
   { id: 'survival', label: 'Supervivencia',       icon: '🧭', skills: ['Primeros auxilios', 'Pesca', 'Rastreo', 'Sigilo', 'Trampas'] },
 ];

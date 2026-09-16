@@ -100,7 +100,7 @@ export function Game({ api, onSettings }: { api: GameApi; onSettings: () => void
 
   const tools: { id: PanelId; icon: string; label: string; key: string }[] = [
     { id: 'inventory', icon: '🎒', label: 'Mochila', key: 'I' },
-    { id: 'craft', icon: '🔧', label: 'Fabricar', key: 'C' },
+    { id: 'craft', icon: '🔨', label: 'Fabricar', key: 'C' },
     { id: 'map', icon: '🗺️', label: 'Mapa', key: 'M' },
     { id: 'base', icon: '🏚️', label: 'Refugio', key: 'B' },
     { id: 'sleep', icon: '😴', label: 'Dormir', key: 'Z' },
@@ -199,7 +199,7 @@ export function Game({ api, onSettings }: { api: GameApi; onSettings: () => void
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
             <ContextRail api={api} onOpen={(id) => setPanel(id as PanelId)} />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <button className="btn" onClick={() => setPanel('craft')}>🔧 Fabricar</button>
+              <button className="btn" onClick={() => setPanel('craft')}>🔨 Fabricar</button>
               <button className="btn" onClick={() => setPanel('diary')}>📓 Diario ({state.diary.length})</button>
               <button className="btn" onClick={() => setPanel('album')}>📷 Álbum ({state.photos.length})</button>
               <button className="btn" onClick={() => setPanel('saves')}>💾 Partidas</button>

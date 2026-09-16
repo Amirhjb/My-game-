@@ -5,6 +5,7 @@ import { clockOf, dayOf, partOfDay, pl } from '../engine/rules';
 import { currentNode, ZONE_TYPES } from '../engine/world';
 import { Block } from './ui';
 import type { GameApi } from '../hooks/useGame';
+import type { ZoneNode } from '../engine/types';
 
 /** Pesos pequeños en gramos: «0.0 kg» no le dice nada a nadie. */
 export function formatWeight(kg: number): string {
@@ -12,10 +13,29 @@ export function formatWeight(kg: number): string {
   return `${kg.toFixed(kg < 1 ? 2 : 1)} kg`;
 }
 
+function ZoneChips({ node }: { node: ZoneNode }) {
+  return (
+    <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+      <span className="chip">{ZONE_TYPES[node.type].icon} {ZONE_TYPES[node.type].label}</span>
+      <span
+        className="chip"
+        style={node.danger >= 4
+          ? { color: 'var(--bad)', borderColor: 'oklch(66% 0.19 25 / 0.4)' }
+          : node.danger >= 3 ? { color: 'var(--warn)' } : undefined}
+      >
+        Peligro {node.danger}/5
+      </span>
+      {node.isBase && <span className="chip chip--accent">Refugio</span>}
+    </div>
+  );
+}
+
 export function ContextRail({ api, onOpen }: { api: GameApi; onOpen: (id: string) => void }) {
   const { state, sceneUrl, status, settings, takePhoto } = api;
   const node = currentNode(state.map);
   const weather = WEATHER[state.weather.id];
+  // Solo merece la pena reservar el hueco si hay imagen o está a punto de haberla.
+  const mostrarEscena = settings.images && (Boolean(sceneUrl) || status === 'imaging');
 
   const cat = state.customItems;
   const grouped = [...state.inventory]
@@ -24,46 +44,40 @@ export function ContextRail({ api, onOpen }: { api: GameApi; onOpen: (id: string
 
   return (
     <>
-      <Block title="Escena">
-        <div className="scene">
-          {sceneUrl ? (
-            <img src={sceneUrl} alt={state.sceneDescription || 'Ilustración de la escena actual'} />
-          ) : (
-            <div className="scene__empty">
-              {!settings.images
-                ? <>Imágenes desactivadas<br />en Ajustes</>
-                : status === 'imaging'
-                  ? <>Generando la escena…</>
-                  : <>La ilustración aparecerá<br />cuando avance la historia</>}
+      {/* La caja de escena ocupaba casi 200 px con un «Imágenes desactivadas»
+          dentro. Si no hay nada que enseñar, se colapsa a una línea y el sitio
+          se lo queda el entorno, que sí informa. */}
+      {mostrarEscena ? (
+        <Block title="Escena">
+          <div className="scene">
+            {sceneUrl ? (
+              <img src={sceneUrl} alt={state.sceneDescription || 'Ilustración de la escena actual'} />
+            ) : (
+              <div className="scene__empty">Generando la escena…</div>
+            )}
+            <div className="scene__caption">
+              <span aria-hidden>📍</span>
+              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {state.location}
+              </span>
             </div>
-          )}
-          <div className="scene__caption">
+            {sceneUrl && (
+              <button className="scene__shot" onClick={takePhoto} title="Guardar en el álbum" aria-label="Guardar esta escena en el álbum">
+                📷
+              </button>
+            )}
+          </div>
+          {node && <ZoneChips node={node} />}
+        </Block>
+      ) : (
+        <Block title="Dónde estás">
+          <div className="place">
             <span aria-hidden>📍</span>
-            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {state.location}
-            </span>
+            <span className="place__name">{state.location}</span>
           </div>
-          {sceneUrl && (
-            <button className="scene__shot" onClick={takePhoto} title="Guardar en el álbum" aria-label="Guardar esta escena en el álbum">
-              📷
-            </button>
-          )}
-        </div>
-        {node && (
-          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-            <span className="chip">{ZONE_TYPES[node.type].icon} {ZONE_TYPES[node.type].label}</span>
-            <span
-              className="chip"
-              style={node.danger >= 4
-                ? { color: 'var(--bad)', borderColor: 'oklch(66% 0.19 25 / 0.4)' }
-                : node.danger >= 3 ? { color: 'var(--warn)' } : undefined}
-            >
-              Peligro {node.danger}/5
-            </span>
-            {node.isBase && <span className="chip chip--accent">Refugio</span>}
-          </div>
-        )}
-      </Block>
+          {node && <ZoneChips node={node} />}
+        </Block>
+      )}
 
       <Block title="Entorno">
         <div className="weather">
